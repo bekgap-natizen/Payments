@@ -3,7 +3,7 @@ function selectedSum(r){return Object.values(selectedItems(r)).reduce((n,x)=>n+N
 function paidStatus(r){return r.plan.status==='paid'&&!r.planNeedsReview;}
 function docRows(r){
  const items=selectedItems(r),locked=!r.planNeedsReview&&(r.plan.status==='paid'||r.plan.status==='approved');
- const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0);
+ const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0).slice().reverse();
  return `<div class="table-scroll"><table class="pay-doc-table"><thead><tr><th class="pick-col">✓</th><th>Входящий документ</th><th>Дата входящая</th><th>Срок оплаты</th><th class="right">Остаток расчётный</th><th class="right">Выбрано к оплате, ₽</th><th>Статус</th></tr></thead><tbody>
  ${docs.map(d=>{const checked=Object.hasOwn(items,d.id)&&Number(items[d.id])>0,remaining=d.remainingCents;
  const status=paidStatus(r)&&d.paidLocalCents>0?'Отмечено оплачено':!d.dueDate?'Нет даты':d.overdue?'Просрочено':d.dueNow?'Срок наступил':'Позднее';
@@ -32,11 +32,11 @@ function renderPayments(model){if(!model)return header('Платежи на да
  if(state.paymentOrg)rows=rows.filter(r=>r.org===state.paymentOrg);
  if(state.paymentSearch)rows=rows.filter(r=>C.key(r.supplier+' '+r.org).includes(C.key(state.paymentSearch)));
  if(state.onlyDue)rows=rows.filter(r=>r.dueCents>0||r.plannedCents>0);
- rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru'));
+ rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru')).reverse();
  const names=[...new Set(rows.map(r=>r.org))];
  return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-primary" ${approvedRows(model).length?'':'disabled'}>↓ Выгрузить Excel</button>`)+
  `<div class="kpis">${kpi('Долг 1С',rub(model.totals.debtCents),'Поступления и оплаты уже учтены','₽')}${kpi('Срок наступил',rub(model.totals.dueCents),'Расчёт по входящим датам','◷')}${kpi('Утверждено',rub(model.totals.plannedCents),'Для итогового реестра','✓')}${kpi('Проведено вручную',rub(model.totals.paidCents),'Отметки только этого снимка','●')}</div>
- <div class="alert"><span>Порядок распределения: <b>новые поступления → старые</b> до суммы конечного долга поставщика из 1С. Отметьте документы и измените сумму прямо в строке. Зелёный индикатор означает, что срок наступил, <b>а не что документ подтверждён бухгалтерией как неоплаченный</b>.</span></div>
+ <div class="alert"><span>Отображение платежей: <b>в обратном порядке</b>; входящие документы — <b>старые → новые</b>. Расчётное распределение долга по 1С по-прежнему идёт <b>новые поступления → старые</b> до суммы конечного долга поставщика. Отметьте документы и измените сумму прямо в строке. Зелёный индикатор означает, что срок наступил, <b>а не что документ подтверждён бухгалтерией как неоплаченный</b>.</span></div>
  <div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только со сроком оплаты</label></div>
  ${!rows.length?`<div class="card"><div class="empty"><h2>Нет поставщиков для отображения</h2><p>Укажите действующих контрагентов в справочнике или измените фильтры.</p><button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button></div></div>`:''}
  ${names.map(org=>`<section class="org-block"><div class="org-head"><h2>${esc(org)}</h2><span>Долг: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.debtCents,0))}</b></span><span>Утверждено: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.plannedCents,0))}</b></span></div>${rows.filter(r=>r.org===org).map(vendorCard).join('')}</section>`).join('')}
