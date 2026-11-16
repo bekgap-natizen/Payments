@@ -9,7 +9,8 @@ for(const [dest,subdir] of specs){
  const dir=path.join(root,subdir);
  const modules=fs.readdirSync(dir).filter(x=>/^\d{2}-.*\.js$/.test(x)).sort();
  if(modules.length<3) throw Error('Incomplete module group: '+subdir);
- const source=modules.map(f=>fs.readFileSync(path.join(dir,f),'utf8')).join('\n\n');
+ const paths = dest === 'ui' ? ['src/shell/template.js', ...modules.map(f=>path.join(subdir,f))] : modules.map(f=>path.join(subdir,f));
+ const source=paths.map(p=>fs.readFileSync(path.join(root,p),'utf8')).join('\n\n');
  fs.writeFileSync(path.join(output,'assets',dest+'.js'),source,'utf8');
 }
 for(const file of ['foundation.css','components.css','responsive-brand.css']){
