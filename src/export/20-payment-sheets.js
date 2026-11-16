@@ -40,10 +40,9 @@ function makeSheetData(model,date,metadata={}){
   summary.push(row('total','ИТОГО '+org,money(vendors.reduce((n,r)=>n+r.debtCents,0)),money(vendors.reduce((n,r)=>n+r.allocatedCents,0)),money(vendors.reduce((n,r)=>n+r.dueCents,0)),money(vendors.reduce((n,r)=>n+r.futureCents,0)),money(vendors.reduce((n,r)=>n+r.unmatchedCents,0)),money(vendors.reduce((n,r)=>n+r.plannedCents,0))));
 
  }
- // Only the dated payment sheet follows the reversed display ordering.
- // All 1C balance calculations and the separate audit sheets remain unchanged.
- const paymentOrder=(a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru');
- const datedVendors=[...approved].sort(paymentOrder).reverse();
+ // Keep organization and supplier ordering unchanged; reverse only documents inside a supplier.
+ // Allocation and 1C balances are never reordered or recalculated here.
+ const datedVendors=approved;
  const datedOrgs=[...new Set(datedVendors.map(r=>r.org))];
  const orgTotals=[];
  for(const org of datedOrgs){
