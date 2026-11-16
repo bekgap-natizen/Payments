@@ -1,0 +1,14 @@
+{
+  "name": "volmax-payments",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Локальный прототип учета и согласования платежей ВОЛМАКС",
+  "scripts": {
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "serve": "python3 -m http.server 8080 --directory dist",
+    "build": "node scripts/build.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

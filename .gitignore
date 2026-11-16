@@ -1,0 +1,16 @@
+node_modules/
+coverage/
+*.log
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.zip
+.env*
+.DS_Store
+__pycache__/
+playwright-report/
+*.png
+!assets/volmax-mark.png
+dist/
+*.jsonl
