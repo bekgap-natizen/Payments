@@ -23,12 +23,9 @@ function makeSheetData(model,date,metadata={}){
   row('section','Контрольные суммы на '+fmtDate(date)),
   row('warning','Расхождения не исправляются автоматически'),
   row('header','Организация','Поставщик','Итог 1С, ₽','Сумма документов, ₽','Разница, ₽','Замечание','','')];
- const orgTotals=[];
  const orgs=[...new Set(active.map(r=>r.org))];
  for(const org of orgs){const vendors=active.filter(r=>r.org===org);
   summary.push(row('org',org));
-  const approvedVendors=approved.filter(r=>r.org===org),supplierTotals=[];
-  if(approvedVendors.length)dated.push(row('org',org));
   for(const r of vendors){
    summary.push(row('supplier',r.supplier,money(r.debtCents),money(r.allocatedCents),money(r.dueCents),money(r.futureCents),money(r.unmatchedCents),money(r.plannedCents),r.flags.join('; ')||'—'));
    for(const d of r.documents){
@@ -38,25 +35,37 @@ function makeSheetData(model,date,metadata={}){
    }
    for(const d of r.paymentDocuments)docs.push(row('',r.org,r.supplier,'Платёж в 1С',d.sourceDocument||'—','','',money(d.amountCents),'Уже включено в конечное сальдо поставщика 1С, НЕ вычитать повторно'));
    for(const d of r.otherDocuments)docs.push(row('',r.org,r.supplier,'Корректировка',d.sourceDocument||'—','','',money(d.amountCents),'Включено в конечное сальдо 1С'));
-   if(approvedVendors.includes(r)){
-     const items=r.plan.items||{};
-     const selected=r.documents.filter(d=>(items[d.id]||0)>0);
-     dated.push(row('supplier',r.supplier,'','','','','',`Долг 1С: ${money(r.debtCents).toFixed(2)} ₽`));
-     const detailC=[];
-     for(const d of selected){const paid=items[d.id],ref=dated.length+1;
-       dated.push(row('',`↳ ${r.supplier}`,money(paid),fmtDate(date),d.incomingNumber||'—',fmtDate(d.incomingDate),fmtDate(d.dueDate),money(d.allocatedCents),paid<d.allocatedCents?'Частичная сумма':'Выбрано полностью'));
-       detailC.push(`C${ref}`);
-     }
-     const subtotal=selected.reduce((n,d)=>n+items[d.id],0);
-     dated.push(row('total','ИТОГО '+r.supplier,{formula:`SUM(${detailC.join(',')})`,cached:money(subtotal)},'','','','',''));
-     supplierTotals.push(`C${dated.length}`);
-   }
+
   }
   summary.push(row('total','ИТОГО '+org,money(vendors.reduce((n,r)=>n+r.debtCents,0)),money(vendors.reduce((n,r)=>n+r.allocatedCents,0)),money(vendors.reduce((n,r)=>n+r.dueCents,0)),money(vendors.reduce((n,r)=>n+r.futureCents,0)),money(vendors.reduce((n,r)=>n+r.unmatchedCents,0)),money(vendors.reduce((n,r)=>n+r.plannedCents,0))));
-  if(supplierTotals.length){const amt=approvedVendors.reduce((n,r)=>n+r.plannedCents,0);
-    dated.push(row('total','ИТОГО '+org,{formula:`SUM(${supplierTotals.join(',')})`,cached:money(amt)},'','','','',''));
-    orgTotals.push(`C${dated.length}`);
-  }
+
+ }
+ // Only the dated payment sheet follows the reversed display ordering.
+ // All 1C balance calculations and the separate audit sheets remain unchanged.
+ const paymentOrder=(a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru');
+ const datedVendors=[...approved].sort(paymentOrder).reverse();
+ const datedOrgs=[...new Set(datedVendors.map(r=>r.org))];
+ const orgTotals=[];
+ for(const org of datedOrgs){
+   dated.push(row('org',org));
+   const subtotalRefs=[];
+   for(const r of datedVendors.filter(r=>r.org===org)){
+     const items=r.plan.items||{};
+     const selected=r.documents.filter(d=>(items[d.id]||0)>0).slice().reverse();
+     dated.push(row('supplier',r.supplier,'','','','','',`Долг 1С: ${money(r.debtCents).toFixed(2)} ₽`));
+     const detailRefs=[];
+     for(const d of selected){
+       const paid=items[d.id],ref=dated.length+1;
+       dated.push(row('',`↳ ${r.supplier}`,money(paid),fmtDate(date),d.incomingNumber||'—',fmtDate(d.incomingDate),fmtDate(d.dueDate),money(d.allocatedCents),paid<d.allocatedCents?'Частичная сумма':'Выбрано полностью'));
+       detailRefs.push(`C${ref}`);
+     }
+     const subtotal=selected.reduce((n,d)=>n+items[d.id],0);
+     dated.push(row('total','ИТОГО '+r.supplier,{formula:`SUM(${detailRefs.join(',')})`,cached:money(subtotal)},'','','','',''));
+     subtotalRefs.push(`C${dated.length}`);
+   }
+   const total=datedVendors.filter(r=>r.org===org).reduce((n,r)=>n+r.plannedCents,0);
+   dated.push(row('total','ИТОГО '+org,{formula:`SUM(${subtotalRefs.join(',')})`,cached:money(total)},'','','','',''));
+   orgTotals.push(`C${dated.length}`);
  }
  const sumApproved=approved.reduce((n,r)=>n+r.plannedCents,0);
  dated.push(row('total','ВСЕГО К ОПЛАТЕ',{formula:`SUM(${orgTotals.join(',')})`,cached:money(sumApproved)},'','','','',''));
