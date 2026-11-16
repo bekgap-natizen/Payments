@@ -1,0 +1,79 @@
+name: Offline builds and GitHub Releases
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'index.html'
+      - 'package.json'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'docs/RELEASES.md'
+      - '.github/workflows/offline-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and automated tests
+        run: npm test
+      - name: Package install-free offline application
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          VERSION="v$(node -p 'require("./package.json").version')-preview.${GITHUB_RUN_NUMBER}"
+          printf '%s\n' "$VERSION" > dist/VERSION.txt
+          cp docs/RELEASES.md dist/README_START.md
+          (cd dist && zip -q -r ../release/VOLMAX-Payments-Offline.zip .)
+          (cd release && sha256sum VOLMAX-Payments-Offline.zip > VOLMAX-Payments-Offline.zip.sha256)
+          unzip -t release/VOLMAX-Payments-Offline.zip
+      - name: Attach downloadable ZIP to this build
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOLMAX-Payments-Offline
+          path: |
+            release/VOLMAX-Payments-Offline.zip
+            release/VOLMAX-Payments-Offline.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-release:
+    needs: build-and-test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: VOLMAX-Payments-Offline
+          path: release
+      - name: Publish pre-release with the ready-to-run ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="v$(node -p 'require("./package.json").version')-preview.${GITHUB_RUN_NUMBER}"
+          gh release create "$VERSION" \
+            release/VOLMAX-Payments-Offline.zip \
+            release/VOLMAX-Payments-Offline.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ВОЛМАКС — Платежи поставщикам $VERSION" \
+            --notes "Тестовая автономная версия. В Assets скачайте VOLMAX-Payments-Offline.zip, распакуйте полностью и откройте index.html в Chrome или Edge. Реальные данные хранятся только в локальном браузере. Банковских операций и юридически подтверждённой сверки каждого документа нет. Инструкция: docs/RELEASES.md." \
+            --prerelease
