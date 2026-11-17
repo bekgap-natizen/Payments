@@ -13,7 +13,7 @@ for(const [dest,subdir] of specs){
  const source=paths.map(p=>fs.readFileSync(path.join(root,p),'utf8')).join('\n\n');
  fs.writeFileSync(path.join(output,'assets',dest+'.js'),source,'utf8');
 }
-for(const file of ['foundation.css','components.css','responsive-brand.css']){
+for(const file of ['foundation.css','components.css','responsive-brand.css','layout-safety.css']){
  fs.copyFileSync(path.join(root,'src/styles',file),path.join(output,'assets',file));
 }
 fs.copyFileSync(path.join(root,'assets/volmax-mark.png'),path.join(output,'assets/volmax-mark.png'));

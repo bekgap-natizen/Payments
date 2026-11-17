@@ -1,0 +1,75 @@
+/* Устойчивый макет: длинные юридические названия, суммы и действия не перекрываются.
+   Здесь только представление; алгоритмы распределения и сальдо остаются без изменений. */
+.main-wrap,.main,.page,.org-block,#page-payments .detail,#page-payments .detailbody{min-width:0;max-width:100%}
+.section-head,.card-head,.vendor-tools,.org-head{min-width:0}
+.section-head>div:first-child,.card-head>h2{min-width:0;overflow-wrap:anywhere}
+.section-head .section-actions,.card-head{flex-wrap:wrap}
+.section-head .section-actions{justify-content:flex-end}
+.btn,.badge{max-width:100%;overflow-wrap:anywhere;white-space:normal;text-align:center;line-height:1.35}
+.toolbar .field{min-width:0;max-width:100%}
+.toolbar select.control{max-width:100%;min-width:0}
+.table-scroll{width:100%;max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain}
+.table-scroll table{min-width:max-content}
+.table-scroll .name,.table-scroll .muted{overflow-wrap:anywhere}
+#page-payments .org-head{display:flex;align-items:baseline;gap:8px 20px;flex-wrap:wrap;margin:25px 0 11px}
+#page-payments .org-head h2{flex:1 1 220px;min-width:0;margin:0;color:#173952;font-size:19px;line-height:1.3;overflow-wrap:anywhere}
+#page-payments .org-head>span{font-size:12px;color:#56718a;min-width:0;overflow-wrap:anywhere}
+#page-payments .detail{width:100%;margin:9px 0}
+#page-payments .detail>summary{display:flex;align-items:center;gap:10px;padding:13px 15px;min-width:0}
+#page-payments .detail>summary::before{flex:0 0 12px;margin:0}
+/* Сохраняем привычную горизонтальную строку поставщика (вместо сетки из двух строк).
+   При недостаточной ширине только отдельные элементы переносятся; ничего не накладывается. */
+#page-payments .vendor-summary{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;width:100%;min-width:0}
+#page-payments .vendor-summary>.supplier-pick{flex:0 0 22px;max-width:22px;margin:0}
+#page-payments .vendor-title{flex:1 1 190px;min-width:0;font-size:14px;font-weight:750;line-height:1.4;color:#163e5a;
+  overflow-wrap:anywhere;word-break:normal}
+#page-payments .vendor-summary>.badge{flex:0 0 auto;max-width:165px;min-width:0;order:3}
+#page-payments .vendor-metrics{display:flex;align-items:center;gap:5px 16px;min-width:0;max-width:100%;flex:0 1 auto;flex-wrap:wrap;order:2}
+#page-payments .vendor-metrics>span{display:inline-flex;align-items:baseline;gap:5px;min-width:0;max-width:100%;
+  flex-wrap:wrap;color:#647e92;font-size:12px;line-height:1.5}
+#page-payments .vendor-metrics b{white-space:nowrap;font-variant-numeric:tabular-nums;color:#194562}
+#page-payments .vendor-tools{display:flex;justify-content:space-between;align-items:center;gap:11px;flex-wrap:wrap;margin:0 0 12px}
+#page-payments .vendor-tools>div:first-child{flex:1 1 270px;min-width:0;overflow-wrap:anywhere;line-height:1.5;font-size:12px}
+#page-payments .vendor-tools .section-actions{display:flex;flex-wrap:wrap;gap:8px}
+#page-payments .pay-doc-table{min-width:890px;width:100%}
+#page-payments .pay-doc-table td .name{overflow-wrap:anywhere;word-break:break-word;max-width:310px}
+#page-payments .pay-doc-table .doc-money{box-sizing:border-box;width:160px;max-width:100%;min-width:0}
+#page-payments .plan-workflow{min-width:0}
+#page-payments .work-selected{display:flex;gap:5px 14px;align-items:center;flex-wrap:wrap;flex:1 1 260px;min-width:0;overflow-wrap:anywhere}
+#page-payments .work-selected small{flex-basis:100%;line-height:1.45}
+#page-payments .work-selected strong{color:#085e84;font-size:17px;white-space:nowrap}
+#page-payments .plan-workflow .section-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+@media(max-width:900px){
+  .section-head{flex-wrap:wrap}
+  .section-head .section-actions{justify-content:flex-start}
+}
+/* В исходном интерфейсе документы всегда были строками таблицы.
+   На узких экранах горизонтально прокручивается только таблица, не вся страница. */
+@media(max-width:800px){
+  #page-payments .pay-doc-table{display:table;min-width:890px}
+  #page-payments .pay-doc-table thead{display:table-header-group}
+  #page-payments .pay-doc-table tbody{display:table-row-group}
+  #page-payments .pay-doc-table tbody tr{display:table-row}
+  #page-payments .pay-doc-table tbody td{display:table-cell}
+}
+@media(max-width:600px){
+  #page-payments .vendor-summary{gap:7px 10px}
+  #page-payments .vendor-title{flex:1 1 calc(100% - 40px)}
+  #page-payments .vendor-metrics{flex:1 1 100%;gap:3px 13px}
+  #page-payments .vendor-summary>.badge{order:1;margin-left:32px}
+  #page-payments .detail>summary{gap:7px;padding:11px}
+  #page-payments .detail .detailbody{padding:10px}
+  #page-payments .vendor-tools .section-actions{justify-content:flex-start}
+  #page-payments .plan-workflow .section-actions{justify-content:flex-start}
+  #page-payments .org-head h2{font-size:17px}
+  .toolbar .field{flex:1 1 100%}
+  .toolbar .field .control{width:100%;min-width:0;max-width:100%}
+  .toolbar .toggle-label{flex:1 1 100%;min-width:0}
+  .topbar .snapshot-pill{white-space:normal;max-width:115px;overflow-wrap:normal;line-height:1.3;text-align:center;padding:5px 7px;flex:0 0 auto}
+  .topbar .mobile-brand{min-width:0;flex:0 1 auto}
+}
+@media(max-width:365px){
+  #page-payments .vendor-summary{column-gap:7px}
+  #page-payments .vendor-metrics>span{font-size:11px}
+  .topbar .snapshot-pill{max-width:104px}
+}

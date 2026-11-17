@@ -13,7 +13,7 @@ function checkTotal(r,items){const docs=new Map(r.allocatedDocuments.map(d=>[d.i
 function updateDocument(k,id,mode,value){const r=currentRow(k);if(!r)return toast('Нет поставщика в текущем срезе');
  try{const p=getPlan(r),d=r.allocatedDocuments.find(d=>d.id===id);
  if(!d||d.allocatedCents<=0)throw Error('Нельзя выбрать документ без долга');
- if(mode==='check'){if(value){const val=C.cents([...document.querySelectorAll('[data-doc-amount]')].find(x=>x.dataset.docAmount===id)?.value);
+ if(mode==='check'){if(value){const val=C.cents([...document.querySelectorAll('[data-doc-amount]')].find(x=>x.dataset.docAmount===id&&x.dataset.key===k)?.value);
  if(val===null||val<=0||val>d.remainingCents)throw Error('Укажите сумму от 0,01 до остатка документа');p.items[id]=val;}else delete p.items[id];}
  else {const val=C.cents(value);if(val===null||val<0||val>d.remainingCents)throw Error('Неверная сумма: допустимо от нуля до '+rub(d.remainingCents));if(val===0)delete p.items[id];else p.items[id]=val;}
  checkTotal(r,p.items);state.openVendors.add(k);savePlan(r,p);
@@ -21,8 +21,11 @@ function updateDocument(k,id,mode,value){const r=currentRow(k);if(!r)return toas
 function action(k,act){const r=currentRow(k);if(!r)return toast('Нет поставщика');
  const prev=state.plans[planId(k)]||{},current=r.plan||{};
  try{
- if(act==='select-due'||act==='clear'){
- const p=getPlan(r);if(act==='clear')p.items={};else for(const d of r.allocatedDocuments){if(d.allocatedCents>0&&d.dueNow&&d.remainingCents>0)p.items[d.id]=d.remainingCents;}
+ if(act==='select-due'||act==='clear'||act==='clear-due'){
+ const p=getPlan(r);
+ if(act==='clear')p.items={};
+ else if(act==='clear-due'){for(const d of r.allocatedDocuments){if(d.dueNow)delete p.items[d.id];}}
+ else for(const d of r.allocatedDocuments){if(d.allocatedCents>0&&d.dueNow&&d.remainingCents>0&&!Object.hasOwn(p.items,d.id))p.items[d.id]=d.remainingCents;}
  checkTotal(r,p.items);state.openVendors.add(k);savePlan(r,p);return;
  }
  if(act==='reopen'){
