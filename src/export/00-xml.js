@@ -8,7 +8,7 @@ function col(n){let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(
 function num(cents){return Number((cents/100).toFixed(2));}
 function sheetXml(rows){
  let xml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/>';
- xml+='<cols><col min="1" max="1" width="4" customWidth="1"/><col min="2" max="2" width="39" customWidth="1"/><col min="3" max="3" width="19" customWidth="1"/><col min="4" max="4" width="19" customWidth="1"/><col min="5" max="5" width="29" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/><col min="7" max="7" width="22" customWidth="1"/><col min="8" max="8" width="20" customWidth="1"/><col min="9" max="9" width="44" customWidth="1"/></cols>';
+ xml+='<cols><col min="1" max="1" width="4" customWidth="1"/><col min="2" max="2" width="39" customWidth="1"/><col min="3" max="3" width="19" customWidth="1"/><col min="4" max="4" width="19" customWidth="1"/><col min="5" max="5" width="29" customWidth="1"/><col min="6" max="6" width="18" customWidth="1"/><col min="7" max="7" width="22" customWidth="1"/><col min="8" max="8" width="20" customWidth="1"/><col min="9" max="9" width="22" customWidth="1"/><col min="10" max="10" width="65" customWidth="1"/></cols>';
  xml+='<sheetData>';
  rows.forEach((row,i)=>{
    const style={title:1,header:2,org:3,supplier:4,total:5,warning:6,section:7}[row.type]||0;

@@ -12,13 +12,13 @@ function makeSheetData(model,date,metadata={}){
   row('warning','Бухгалтерское сальдо 1С уже учитывает ранее проведённые оплаты — повторный вычет запрещён'),
   row('header','Организация / Поставщик','Долг 1С, ₽','Разнесено по поступлениям, ₽','По сроку, ₽','Будущие, ₽','Не разнесено, ₽','Утверждено, ₽','Примечание')];
  const dated=[titleRow('ВОЛМАКС · Платежи на '+fmtDate(date)+demo),
-  row('section','Только утверждённые документы · не банковское платёжное поручение'),
-  row('warning','Распределение долга по входящим документам: от новых к старым; требует проверки по зачётам 1С'),
-  row('header','Организация / Поставщик','Сумма к оплате, ₽','Дата платежа','Номер входящего','Дата входящего','Дата по отсрочке','Долг по документу, ₽','Примечание')];
+  row('section','Подтверждённый реестр · не банковское поручение'),
+  row('warning','Детали платежей — лист «Документы». Сальдо по накладным расчётное.'),
+  row('header','Организация / Поставщик','К оплате, ₽','Общий долг, ₽','Срок наступил, ₽','Документов','Дата платежа')];
  const docs=[titleRow('ВОЛМАКС · Расшифровка'+demo),
   row('section','Сальдо каждого поставщика распределено по поступлениям от новых к старым'),
   row('warning','Не является подтверждением фактического зачёта конкретных документов: нужна детализация 1С'),
-  row('header','Организация','Поставщик','Вид операции','Входящий документ','Дата входящая','Дата по отсрочке','Сумма (расчётная), ₽','Примечание')];
+  row('header','Организация','Поставщик','Вид операции','Входящий документ','Дата входящая','Дата по отсрочке','Сумма (расчётная), ₽','К оплате, ₽','Примечание')];
  const reconciliation=[titleRow('ВОЛМАКС · Сверка'+demo),
   row('section','Контрольные суммы на '+fmtDate(date)),
   row('warning','Расхождения не исправляются автоматически'),
@@ -28,13 +28,13 @@ function makeSheetData(model,date,metadata={}){
   summary.push(row('org',org));
   for(const r of vendors){
    summary.push(row('supplier',r.supplier,money(r.debtCents),money(r.allocatedCents),money(r.dueCents),money(r.futureCents),money(r.unmatchedCents),money(r.plannedCents),r.flags.join('; ')||'—'));
-   for(const d of r.documents){
+   for(const d of [...r.documents].reverse()){
      const kind=d.allocatedCents?d.dueDate&&d.dueDate<=date?'Срок наступил':'Будущий':'Вне расчётного остатка';
      const comment=`Строка ${d.row}; исходно ${money(d.originalCents)}; расчётно покрыто ${money(d.coveredCents)}; ${kind}`;
-     docs.push(row('',r.org,r.supplier,'Поступление',d.incomingNumber||'—',fmtDate(d.incomingDate),fmtDate(d.dueDate),money(d.allocatedCents),comment));
+     docs.push(row('',r.org,r.supplier,'Поступление',d.incomingNumber||'—',fmtDate(d.incomingDate),fmtDate(d.dueDate),money(d.allocatedCents),money(r.plan?.status==='approved'&&!r.planNeedsReview?r.plan.items?.[d.id]:0),comment));
    }
-   for(const d of r.paymentDocuments)docs.push(row('',r.org,r.supplier,'Платёж в 1С',d.sourceDocument||'—','','',money(d.amountCents),'Уже включено в конечное сальдо поставщика 1С, НЕ вычитать повторно'));
-   for(const d of r.otherDocuments)docs.push(row('',r.org,r.supplier,'Корректировка',d.sourceDocument||'—','','',money(d.amountCents),'Включено в конечное сальдо 1С'));
+   for(const d of r.paymentDocuments)docs.push(row('',r.org,r.supplier,'Платёж в 1С',d.sourceDocument||'—','','',money(d.amountCents),'','Уже включено в конечное сальдо поставщика 1С, НЕ вычитать повторно'));
+   for(const d of r.otherDocuments)docs.push(row('',r.org,r.supplier,'Корректировка',d.sourceDocument||'—','','',money(d.amountCents),'','Включено в конечное сальдо 1С'));
 
   }
   summary.push(row('total','ИТОГО '+org,money(vendors.reduce((n,r)=>n+r.debtCents,0)),money(vendors.reduce((n,r)=>n+r.allocatedCents,0)),money(vendors.reduce((n,r)=>n+r.dueCents,0)),money(vendors.reduce((n,r)=>n+r.futureCents,0)),money(vendors.reduce((n,r)=>n+r.unmatchedCents,0)),money(vendors.reduce((n,r)=>n+r.plannedCents,0))));
@@ -51,15 +51,9 @@ function makeSheetData(model,date,metadata={}){
    for(const r of datedVendors.filter(r=>r.org===org)){
      const items=r.plan.items||{};
      const selected=r.documents.filter(d=>(items[d.id]||0)>0).slice().reverse();
-     dated.push(row('supplier',r.supplier,'','','','','',`Долг 1С: ${money(r.debtCents).toFixed(2)} ₽`));
-     const detailRefs=[];
-     for(const d of selected){
-       const paid=items[d.id],ref=dated.length+1;
-       dated.push(row('',`↳ ${r.supplier}`,money(paid),fmtDate(date),d.incomingNumber||'—',fmtDate(d.incomingDate),fmtDate(d.dueDate),money(d.allocatedCents),paid<d.allocatedCents?'Частичная сумма':'Выбрано полностью'));
-       detailRefs.push(`C${ref}`);
-     }
      const subtotal=selected.reduce((n,d)=>n+items[d.id],0);
-     dated.push(row('total','ИТОГО '+r.supplier,{formula:`SUM(${detailRefs.join(',')})`,cached:money(subtotal)},'','','','',''));
+     if(subtotal!==r.plannedCents)throw Error('Сумма документов не совпадает с реестром');
+     dated.push(row('supplier',r.supplier,money(subtotal),money(r.debtCents),money(r.dueCents),selected.length,fmtDate(date)));
      subtotalRefs.push(`C${dated.length}`);
    }
    const total=datedVendors.filter(r=>r.org===org).reduce((n,r)=>n+r.plannedCents,0);
@@ -74,5 +68,5 @@ function makeSheetData(model,date,metadata={}){
  for(const r of active.filter(r=>r.unmatchedCents>0))reconciliation.push(row('warning',r.org,r.supplier,money(r.debtCents),money(r.allocatedCents),money(r.unmatchedCents),'Долг не распределён по поступлениям'));
  if(reconciliation.length===5)reconciliation.push(row('total','Контрольные расхождения не обнаружены'));
  const day=date.slice(8,10)+'.'+date.slice(5,7)+'.'+date.slice(2,4);
- return [['Общая задолженность',summary],[day,dated],['Документы',docs],['Сверка',reconciliation]];
+ return [[day,dated],['Общая задолженность',summary],['Документы',docs],['Сверка',reconciliation]];
 }
