@@ -11,6 +11,7 @@ document.addEventListener('click',async e=>{
  const btn=e.target.closest('[data-act]');if(btn)return action(btn.dataset.key,btn.dataset.act);
 });
 document.addEventListener('change',e=>{const el=e.target;
+ if(el.id==='report-date'){state.importDate=el.value;return;}
  if(el.id==='excel-file'){const label=$('selected-file');if(label)label.textContent=el.files?.[0]?.name||'Файл не выбран';return;}
  if(el.id==='supplier-org'){state.supplierOrg=el.value;draw();return;}
  if(el.id==='payment-org'){state.paymentOrg=el.value;draw();return;}

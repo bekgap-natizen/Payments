@@ -6,7 +6,9 @@ const $=(id)=>document.getElementById(id);
 const esc=C.escapeHtml, rub=(n)=>C.money(n||0), fmtDate=C.prettyDate;
 const pages={overview:'Обзор',payments:'Платежи на дату',suppliers:'Поставщики',reconcile:'Контроль и сверка',import:'Обновить данные 1С'};
 const STORE='volmax-payments-prototype-v1';
-const state={page:'overview',date:null,snapshots:[],snapshot:null,settings:{},plans:{},search:'',paymentSearch:'',supplierOrg:'',paymentOrg:'',openVendors:new Set(),onlyDue:false};
+// The import form defaults to the local calendar day, independently of saved 1C snapshots.
+function localToday(now=new Date()){const pad=n=>String(n).padStart(2,'0');return `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;}
+const state={page:'overview',date:null,importDate:localToday(),snapshots:[],snapshot:null,settings:{},plans:{},search:'',paymentSearch:'',supplierOrg:'',paymentOrg:'',openVendors:new Set(),onlyDue:false};
 let db=null;const memSnapshots=new Map();
 const planId=(k)=>state.date+'¦'+k;
 const currencyInput=(n)=>(n/100).toFixed(2).replace('.',',');
