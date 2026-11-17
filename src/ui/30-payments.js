@@ -1,9 +1,12 @@
 function selectedItems(r){const p=r.plan||{};return p.items||{};}
 function selectedSum(r){return Object.values(selectedItems(r)).reduce((n,x)=>n+Number(x||0),0);}
 function paidStatus(r){return r.plan.status==='paid'&&!r.planNeedsReview;}
+// Display-only filter: a manual future payment is included, a deselected due payment is not.
+function selectedPaymentDocument(r,d){return !paidStatus(r)&&d.allocatedCents>0&&d.remainingCents>0&&Number(selectedItems(r)[d.id]||0)>0;}
+function hasSelectedPayment(r){return (r.allocatedDocuments||[]).some(d=>selectedPaymentDocument(r,d));}
 function docRows(r){
  const items=selectedItems(r),locked=!r.planNeedsReview&&(r.plan.status==='paid'||r.plan.status==='approved');
- const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0).slice().reverse();
+ const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0&&(!state.onlyDue||selectedPaymentDocument(r,d))).slice().reverse();
  return `<div class="table-scroll"><table class="pay-doc-table"><thead><tr><th class="pick-col">✓</th><th>Входящий документ</th><th>Дата входящая</th><th>Срок оплаты</th><th class="right">Остаток расчётный</th><th class="right">Выбрано к оплате, ₽</th><th>Статус</th></tr></thead><tbody>
  ${docs.map(d=>{const checked=Object.hasOwn(items,d.id)&&Number(items[d.id])>0,remaining=d.remainingCents;
  const status=paidStatus(r)&&d.paidLocalCents>0?'Отмечено оплачено':!d.dueDate?'Нет даты':d.overdue?'Просрочено':d.dueNow?'Срок наступил':'Позднее';
@@ -32,14 +35,14 @@ function renderPayments(model){if(!model)return header('Платежи на да
  let rows=model.active.filter(r=>r.debtCents>0||r.plan.status);
  if(state.paymentOrg)rows=rows.filter(r=>r.org===state.paymentOrg);
  if(state.paymentSearch)rows=rows.filter(r=>C.key(r.supplier+' '+r.org).includes(C.key(state.paymentSearch)));
- if(state.onlyDue)rows=rows.filter(r=>r.dueCents>0||r.plannedCents>0);
+ if(state.onlyDue)rows=rows.filter(hasSelectedPayment);
  rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru'));
  const names=[...new Set(rows.map(r=>r.org))];
  return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-primary" ${selection.cents>0?'':'disabled'}>Подтвердить и выгрузить Excel</button>`)+
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
  ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
- <div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только со сроком оплаты</label></div>
- ${!rows.length?`<div class="card"><div class="empty"><h2>Нет поставщиков для отображения</h2><p>Укажите действующих контрагентов в справочнике или измените фильтры.</p><button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button></div></div>`:''}
+ <div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только выбранные к оплате</label></div>
+ ${!rows.length?`<div class="card"><div class="empty"><h2>${state.onlyDue?'Нет выбранных платежей':'Нет поставщиков для отображения'}</h2><p>${state.onlyDue?'Снимите фильтр, чтобы снова увидеть все документы.':'Укажите действующих контрагентов в справочнике или измените фильтры.'}</p>${state.onlyDue?'':'<button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button>'}</div></div>`:''}
  ${names.map(org=>`<section class="org-block"><div class="org-head"><h2>${esc(org)}</h2><span>Долг: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.debtCents,0))}</b></span><span>К оплате: <b>${rub(selection.eligible.filter(r=>r.org===org).reduce((n,r)=>n+selectedSum(r),0))}</b></span></div>${rows.filter(r=>r.org===org).map(vendorCard).join('')}</section>`).join('')}
  <div class="bottom-disclaimer fine">Текущая версия — локальный прототип. Не отправляет деньги в банк. Для бухгалтерского подтверждения зачёта по конкретным счетам нужен регистр взаимозачётов из 1С.</div>`;}
