@@ -48,8 +48,8 @@ function renderPayments(model){if(!model)return header('Платежи на да
  <div class="bottom-disclaimer fine">Текущая версия — локальный прототип. Не отправляет деньги в банк. Для бухгалтерского подтверждения зачёта по конкретным счетам нужен регистр взаимозачётов из 1С.</div>`;}
 
 function orgBudgetKey(org){return state.date+'¦'+org;}
-function budgetStore(){return readLocal('org-budgets',{});}
-function priorityStore(){return readLocal('allocation-priorities',{});}
+function budgetStore(){return typeof readLocal==='function'?readLocal('org-budgets',{}):{};}
+function priorityStore(){return typeof readLocal==='function'?readLocal('allocation-priorities',{}):{};}
 function budgetLocked(r){return !r.planNeedsReview&&['approved','paid'].includes(r.plan.status);}
 function budgetPanel(model,orgs){
  const budgets=budgetStore(), priorities=priorityStore();
@@ -78,8 +78,8 @@ function runOrgBudget(org){
  state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast('Распределено с учётом ранее утверждённых и оплаченных: '+rub(b-left)+'. Свободно: '+rub(left));
  }catch(e){toast('Ошибка: '+e.message,7500);}
 }
-document.addEventListener('change',e=>{const k=e.target.dataset.budgetPriority;if(k){const p=priorityStore();p[k]=e.target.value;saveLocal('allocation-priorities',p);}});
-document.addEventListener('click',e=>{
+if(typeof document!=='undefined')document.addEventListener('change',e=>{const k=e.target.dataset.budgetPriority;if(k){const p=priorityStore();p[k]=e.target.value;saveLocal('allocation-priorities',p);}});
+if(typeof document!=='undefined')document.addEventListener('click',e=>{
  const btn=e.target.closest('[data-auto-org]');if(btn){e.preventDefault();runOrgBudget(btn.dataset.autoOrg);return;}
  if(e.target.closest('#export-payments')&&state.snapshot){
  const budgets=budgetStore(),m=C.analyze(state.snapshot,state.date,state.settings,state.plans), orgs=[...new Set(m.active.map(r=>r.org))];
