@@ -42,7 +42,51 @@ function renderPayments(model){if(!model)return header('Платежи на да
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
  ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
- <div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только выбранные к оплате</label></div>
+ ${budgetPanel(model,orgs)}<div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только выбранные к оплате</label></div>
  ${!rows.length?`<div class="card"><div class="empty"><h2>${state.onlyDue?'Нет выбранных платежей':'Нет поставщиков для отображения'}</h2><p>${state.onlyDue?'Снимите фильтр, чтобы снова увидеть все документы.':'Укажите действующих контрагентов в справочнике или измените фильтры.'}</p>${state.onlyDue?'':'<button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button>'}</div></div>`:''}
  ${names.map(org=>`<section class="org-block"><div class="org-head"><h2>${esc(org)}</h2><span>Долг: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.debtCents,0))}</b></span><span>К оплате: <b>${rub(selection.eligible.filter(r=>r.org===org).reduce((n,r)=>n+selectedSum(r),0))}</b></span></div>${rows.filter(r=>r.org===org).map(vendorCard).join('')}</section>`).join('')}
  <div class="bottom-disclaimer fine">Текущая версия — локальный прототип. Не отправляет деньги в банк. Для бухгалтерского подтверждения зачёта по конкретным счетам нужен регистр взаимозачётов из 1С.</div>`;}
+
+function orgBudgetKey(org){return state.date+'¦'+org;}
+function budgetStore(){return typeof readLocal==='function'?readLocal('org-budgets',{}):{};}
+function priorityStore(){return typeof readLocal==='function'?readLocal('allocation-priorities',{}):{};}
+function budgetLocked(r){return !r.planNeedsReview&&['approved','paid'].includes(r.plan.status);}
+function budgetPanel(model,orgs){
+ const budgets=budgetStore(), priorities=priorityStore();
+ return '<div class="card" style="padding:16px;margin-bottom:16px"><h2>Автораспределение по организациям</h2><p>Лимит на дату отдельно для каждого юрлица. Утверждённые и оплаченные суммы входят в лимит. Только наступившие сроки; спорные документы исключаются.</p>'+
+ orgs.map(org=>{
+ const rr=model.active.filter(r=>r.org===org), b=budgets[orgBudgetKey(org)], selected=rr.reduce((n,r)=>n+(budgetLocked(r)||!paymentBlocked(r)?selectedSum(r):0),0);
+ return '<div style="border-top:1px solid #ccc;padding:12px 0"><b>'+esc(org)+'</b><div class="toolbar"><div class="field"><label>Выделено, ₽</label><input class="control" inputmode="decimal" data-budget-org="'+esc(org)+'" value="'+esc(state.budgetInput?.[orgBudgetKey(org)]??(b===undefined?'':currencyInput(b)))+'"></div><button class="btn btn-primary" data-auto-org="'+esc(org)+'">Распределить</button><span>Выбрано: <b>'+rub(selected)+'</b> · Остаток: <b>'+(b===undefined?'—':rub(b-selected))+'</b></span></div><details><summary>Приоритеты поставщиков</summary>'+rr.map(r=>'<div class="toolbar"><span>'+esc(r.supplier)+'</span><select class="control" data-budget-priority="'+esc(r.key)+'">'+[['critical','Критический'],['normal','По сроку'],['blocked','Исключить']].map(([v,l])=>'<option value="'+v+'" '+((priorities[r.key]||'normal')===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div>').join('')+'</details></div>';
+ }).join('')+'</div>';
+}
+function runOrgBudget(org){
+ try{
+ const input=[...document.querySelectorAll('[data-budget-org]')].find(x=>x.dataset.budgetOrg===org);
+ const b=C.cents(input?.value);if(!input?.value.trim()||!Number.isSafeInteger(b)||b<0)throw Error('Укажите неотрицательный лимит организации');
+ const model=C.analyze(state.snapshot,state.date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
+ if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
+ const locked=rr.filter(budgetLocked).reduce((n,r)=>n+selectedSum(r),0);
+ if(locked>b)throw Error('Лимит меньше уже утверждённых и оплаченных сумм: '+rub(locked));
+ const candidates=rr.filter(r=>!budgetLocked(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
+ candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
+ if(!confirm('Пересчитать черновики только по '+org+'? Лимит '+rub(b)+'. Ручной выбор в этой организации будет заменён, утверждённые и оплаченные суммы останутся.'))return;
+ let left=b-locked;const next={...state.plans}, plans=new Map();
+ for(const r of rr.filter(r=>!budgetLocked(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
+ for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}
+ for(const r of rr.filter(r=>plans.has(r.key))){const p=plans.get(r.key);checkTotal(r,p.items);next[planId(r.key)]=p;}
+ const budgets=budgetStore();budgets[orgBudgetKey(org)]=b;if(state.budgetInput)delete state.budgetInput[orgBudgetKey(org)];
+ state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast('Распределено с учётом ранее утверждённых и оплаченных: '+rub(b-left)+'. Свободно: '+rub(left));
+ }catch(e){toast('Ошибка: '+e.message,7500);}
+}
+if(typeof document!=='undefined')document.addEventListener('input',e=>{const org=e.target.dataset.budgetOrg;if(org){(state.budgetInput??={})[orgBudgetKey(org)]=e.target.value;}});
+if(typeof document!=='undefined')document.addEventListener('change',e=>{const k=e.target.dataset.budgetPriority;if(k){const p=priorityStore();p[k]=e.target.value;saveLocal('allocation-priorities',p);}});
+if(typeof document!=='undefined')document.addEventListener('click',e=>{
+ const btn=e.target.closest('[data-auto-org]');if(btn){e.preventDefault();runOrgBudget(btn.dataset.autoOrg);return;}
+ if(e.target.closest('#export-payments')&&state.snapshot){
+ const budgets=budgetStore(),m=C.analyze(state.snapshot,state.date,state.settings,state.plans), orgs=[...new Set(m.active.map(r=>r.org))];
+ if(Object.keys(state.budgetInput||{}).some(k=>k.startsWith(state.date+'¦'))){e.preventDefault();e.stopImmediatePropagation();toast('Ошибка: примените введённые лимиты кнопкой «Распределить»',7500);return;}
+ if(!orgs.some(o=>Object.hasOwn(budgets,orgBudgetKey(o))))return;
+ for(const org of orgs){const rr=m.active.filter(r=>r.org===org), sum=rr.reduce((n,r)=>n+(budgetLocked(r)||!paymentBlocked(r)?selectedSum(r):0),0),limit=budgets[orgBudgetKey(org)];
+ if(sum>0&&(limit===undefined||sum>limit)){e.preventDefault();e.stopImmediatePropagation();toast('Ошибка: '+org+' — '+(limit===undefined?'не задан лимит':'превышен лимит'),7500);return;}}
+ }
+},true);

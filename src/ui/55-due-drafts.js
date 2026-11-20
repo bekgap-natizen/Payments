@@ -14,6 +14,7 @@ function prepareDueDrafts(model){
   if(!r.tracked || paymentBlocked(r) || !Number.isSafeInteger(r.debtCents) || r.debtCents<=0)continue;
   const id=planId(r.key);
   if(Object.hasOwn(state.plans,id))continue;
+  if(typeof budgetStore==='function'&&Object.hasOwn(budgetStore(),orgBudgetKey(r.org)))continue;
   let available=r.debtCents;
   const items={};
   for(const d of r.allocatedDocuments||[]){

@@ -11,7 +11,20 @@ function localToday(now=new Date()){const pad=n=>String(n).padStart(2,'0');retur
 const state={page:'overview',date:null,importDate:localToday(),snapshots:[],snapshot:null,settings:{},plans:{},search:'',paymentSearch:'',supplierOrg:'',paymentOrg:'',openVendors:new Set(),onlyDue:false};
 let db=null;const memSnapshots=new Map();
 const planId=(k)=>state.date+'¦'+k;
-const currencyInput=(n)=>(n/100).toFixed(2).replace('.',',');
+function groupMoneyInput(value){
+ const raw=String(value).replace(/[\s\u00a0\u202f]/g,'');
+ if(!/^[+-]?\d*(?:[,.]\d*)?$/.test(raw))return String(value);
+ const parts=raw.split(/[,.]/);
+ return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,' ')+(parts.length===2?','+parts[1]:'');
+}
+const currencyInput=n=>groupMoneyInput((n/100).toFixed(2));
+function formatMoneyField(el){
+ const before=el.value, pos=el.selectionStart??before.length;
+ const count=before.slice(0,pos).replace(/\s/g,'').length;
+ const after=groupMoneyInput(before);if(after===before)return;
+ el.value=after;let i=0,seen=0;while(i<after.length&&seen<count){if(!/\s/.test(after[i]))seen++;i++;}
+ try{el.setSelectionRange(i,i);}catch(_){}
+}
 function readLocal(k,def){try{return JSON.parse(localStorage.getItem(STORE+'-'+k))??def;}catch(_){return def;}}
 function saveLocal(k,v){try{localStorage.setItem(STORE+'-'+k,JSON.stringify(v));}catch(_){toast('В этом браузере запрещено локальное сохранение. Не закрывайте вкладку до экспорта.');}}
 function toast(msg,ms=4400){const el=$('toast');if(!el){alert(msg);return;}el.textContent=msg;el.classList.toggle('is-error',/^(Ошибка|Не удалось|Укажите|Выберите|Нельзя|Нет|Превыш)/.test(msg));el.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('show'),ms);}
