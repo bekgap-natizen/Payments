@@ -27,12 +27,15 @@ jobs:
           node scripts/package-appbox.mjs
           unzip -l release/VOLMAX-Payments-AppBox.appbox.zip
           sha256sum release/VOLMAX-Payments-AppBox.appbox.zip > release/VOLMAX-Payments-AppBox.appbox.zip.sha256
+          sha256sum release/VOLMAX-Payments-AppBox-Standard.zip > release/VOLMAX-Payments-AppBox-Standard.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: VOLMAX-Payments-AppBox
           path: |
             release/VOLMAX-Payments-AppBox.appbox.zip
             release/VOLMAX-Payments-AppBox.appbox.zip.sha256
+            release/VOLMAX-Payments-AppBox-Standard.zip
+            release/VOLMAX-Payments-AppBox-Standard.zip.sha256
           retention-days: 30
       - name: Publish AppBox candidate
         env:
@@ -40,4 +43,4 @@ jobs:
         run: |
           VERSION="$(node -p 'require("./package.json").version')"
           TAG="appbox-v${VERSION}-candidate.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" release/VOLMAX-Payments-AppBox.appbox.zip release/VOLMAX-Payments-AppBox.appbox.zip.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ВОЛМАКС Payments AppBox ${VERSION}" --notes "AppBox stateless candidate. Test in AppBox preview before publishing." --prerelease
+          gh release create "$TAG" release/VOLMAX-Payments-AppBox.appbox.zip release/VOLMAX-Payments-AppBox.appbox.zip.sha256 release/VOLMAX-Payments-AppBox-Standard.zip release/VOLMAX-Payments-AppBox-Standard.zip.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ВОЛМАКС Payments AppBox ${VERSION}" --notes "AppBox stateless candidate. Test in AppBox preview before publishing." --prerelease
