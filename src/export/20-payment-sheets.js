@@ -13,7 +13,7 @@ function makeSheetData(model,date,metadata={}){
   row('header','Организация / Поставщик','Долг 1С, ₽','Разнесено по поступлениям, ₽','По сроку, ₽','Будущие, ₽','Не разнесено, ₽','Утверждено, ₽','Примечание')];
  const dated=[titleRow('ВОЛМАКС · Платежи на '+fmtDate(date)+demo),
   row('section','Подтверждённый реестр · не банковское поручение'),
-  row('warning','Детали платежей — лист «Документы». Сальдо по накладным расчётное.'),
+  row('warning','Нажмите «+» слева от поставщика для раскрытия входящих документов; дополнительная расшифровка — лист «Документы».'),
   row('header','Организация / Поставщик','К оплате, ₽','Общий долг, ₽','Срок наступил, ₽','Документов','Дата платежа')];
  const docs=[titleRow('ВОЛМАКС · Расшифровка'+demo),
   row('section','Сальдо каждого поставщика распределено по поступлениям от новых к старым'),
@@ -53,8 +53,20 @@ function makeSheetData(model,date,metadata={}){
      const selected=r.documents.filter(d=>(items[d.id]||0)>0).slice().reverse();
      const subtotal=selected.reduce((n,d)=>n+items[d.id],0);
      if(subtotal!==r.plannedCents)throw Error('Сумма документов не совпадает с реестром');
-     dated.push(row('supplier',r.supplier,money(subtotal),money(r.debtCents),money(r.dueCents),selected.length,fmtDate(date)));
+     const supplierRow=row('supplier',r.supplier,money(subtotal),money(r.debtCents),money(r.dueCents),selected.length,fmtDate(date));
+     if(selected.length)supplierRow.collapsed=true;
+     dated.push(supplierRow);
      subtotalRefs.push(`C${dated.length}`);
+     // In-sheet outline: supplier is the summary row ABOVE its hidden child payments.
+     // No data is hidden from the separate full-detail "Документы" sheet.
+     for(const d of selected){
+       const amount=items[d.id];
+       if(!Number.isSafeInteger(amount)||amount<=0)throw Error('Неверная сумма выбранного документа');
+       const detail=row('detail','  № '+(d.incomingNumber||'Без номера')+' от '+fmtDate(d.incomingDate),money(amount),'','','',fmtDate(d.dueDate));
+       detail.level=1;
+       detail.hidden=true;
+       dated.push(detail);
+     }
    }
    const total=datedVendors.filter(r=>r.org===org).reduce((n,r)=>n+r.plannedCents,0);
    dated.push(row('total','ИТОГО '+org,{formula:`SUM(${subtotalRefs.join(',')})`,cached:money(total)},'','','','',''));
