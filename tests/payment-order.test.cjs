@@ -32,3 +32,17 @@ test('supplier rows in exported Excel expand with plus into selected incoming do
  assert.match(xml,/DOC-OLD/);
  assert.match(xml,/DOC-NEW/);
 });
+
+test('payment sheet removes debt and due columns without changing payment totals or outline',()=>{
+ const E=require('../dist/assets/export.js');
+ const d={id:'invoice',incomingDate:'2026-11-01',incomingNumber:'INV-1',dueDate:'2026-11-10',allocatedCents:25000};
+ const r={org:'ООО А',supplier:'Поставщик',debtCents:50000,allocatedCents:25000,dueCents:25000,futureCents:0,unmatchedCents:0,plannedCents:12500,flags:[],documents:[d],paymentDocuments:[],otherDocuments:[],plan:{status:'approved',items:{invoice:12500}}};
+ const sheets=E.makeSheetData({active:[r],reconciliation:{issues:[]}},'2026-11-16');
+ const dated=sheets[0][1],header=dated.find(x=>x.type==='header'),supplier=dated.find(x=>x.type==='supplier'),detail=dated.find(x=>x.type==='detail');
+ assert.deepEqual(header.values,['','Организация / Поставщик','К оплате, ₽','Документов','Дата платежа']);
+ assert.deepEqual(supplier.values,['','Поставщик',125,1,'16.11.2026']);
+ assert.deepEqual(detail.values,['','  № INV-1 от 01.11.2026',125,'','10.11.2026']);
+ assert.equal(supplier.collapsed,true);assert.equal(detail.hidden,true);assert.equal(detail.level,1);
+ assert.equal(dated.at(-1).values[2].cached,125);
+ assert.ok(sheets[1][1].find(x=>x.type==='header').values.includes('Долг 1С, ₽'));
+});
