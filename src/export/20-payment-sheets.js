@@ -14,7 +14,7 @@ function makeSheetData(model,date,metadata={}){
  const dated=[titleRow('ВОЛМАКС · Платежи на '+fmtDate(date)+demo),
   row('section','Подтверждённый реестр · не банковское поручение'),
   row('warning','Нажмите «+» слева от поставщика для раскрытия входящих документов; дополнительная расшифровка — лист «Документы».'),
-  row('header','Организация / Поставщик','К оплате, ₽','Общий долг, ₽','Срок наступил, ₽','Документов','Дата платежа')];
+  row('header','Организация / Поставщик','К оплате, ₽','Документов','Дата платежа')];
  const docs=[titleRow('ВОЛМАКС · Расшифровка'+demo),
   row('section','Сальдо каждого поставщика распределено по поступлениям от новых к старым'),
   row('warning','Не является подтверждением фактического зачёта конкретных документов: нужна детализация 1С'),
@@ -53,7 +53,7 @@ function makeSheetData(model,date,metadata={}){
      const selected=r.documents.filter(d=>(items[d.id]||0)>0).slice().reverse();
      const subtotal=selected.reduce((n,d)=>n+items[d.id],0);
      if(subtotal!==r.plannedCents)throw Error('Сумма документов не совпадает с реестром');
-     const supplierRow=row('supplier',r.supplier,money(subtotal),money(r.debtCents),money(r.dueCents),selected.length,fmtDate(date));
+     const supplierRow=row('supplier',r.supplier,money(subtotal),selected.length,fmtDate(date));
      if(selected.length)supplierRow.collapsed=true;
      dated.push(supplierRow);
      subtotalRefs.push(`C${dated.length}`);
@@ -62,18 +62,18 @@ function makeSheetData(model,date,metadata={}){
      for(const d of selected){
        const amount=items[d.id];
        if(!Number.isSafeInteger(amount)||amount<=0)throw Error('Неверная сумма выбранного документа');
-       const detail=row('detail','  № '+(d.incomingNumber||'Без номера')+' от '+fmtDate(d.incomingDate),money(amount),'','','',fmtDate(d.dueDate));
+       const detail=row('detail','  № '+(d.incomingNumber||'Без номера')+' от '+fmtDate(d.incomingDate),money(amount),'',fmtDate(d.dueDate));
        detail.level=1;
        detail.hidden=true;
        dated.push(detail);
      }
    }
    const total=datedVendors.filter(r=>r.org===org).reduce((n,r)=>n+r.plannedCents,0);
-   dated.push(row('total','ИТОГО '+org,{formula:`SUM(${subtotalRefs.join(',')})`,cached:money(total)},'','','','',''));
+   dated.push(row('total','ИТОГО '+org,{formula:`SUM(${subtotalRefs.join(',')})`,cached:money(total)},'',''));
    orgTotals.push(`C${dated.length}`);
  }
  const sumApproved=approved.reduce((n,r)=>n+r.plannedCents,0);
- dated.push(row('total','ВСЕГО К ОПЛАТЕ',{formula:`SUM(${orgTotals.join(',')})`,cached:money(sumApproved)},'','','','',''));
+ dated.push(row('total','ВСЕГО К ОПЛАТЕ',{formula:`SUM(${orgTotals.join(',')})`,cached:money(sumApproved)},'',''));
  // Machine-readable check row makes a difference explicit; no green status if not equal.
  reconciliation.push(row('section','Согласовано (поставщики): '+money(sumApproved)+' ₽','','Документы: '+money(approved.reduce((n,r)=>n+Object.values(r.plan.items||{}).reduce((s,v)=>s+v,0),0))+' ₽'));
  for(const issue of model.reconciliation.issues)reconciliation.push(row('warning',issue.org,issue.supplier||'Итог организации',money(issue.reported),money(issue.details),money(issue.difference),issue.reason));
