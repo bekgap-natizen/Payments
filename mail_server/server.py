@@ -4,6 +4,7 @@ import base64
 import ctypes
 from ctypes import wintypes
 from datetime import datetime
+from contextlib import contextmanager
 from email.message import EmailMessage
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -98,6 +99,7 @@ def save_settings(data):
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
     os.replace(tmp,SETTINGS_FILE)
 
+@contextmanager
 def db():
     con=sqlite3.connect(DB_FILE,timeout=12)
     con.execute("""CREATE TABLE IF NOT EXISTS sent(
@@ -105,7 +107,11 @@ def db():
      payment_date TEXT NOT NULL, total_cents INTEGER NOT NULL, state TEXT NOT NULL,
      error TEXT NOT NULL DEFAULT '')""")
     con.commit()
-    return con
+    try:
+        yield con
+        con.commit()
+    finally:
+        con.close()
 
 def canonical_date(raw):
     if not isinstance(raw,str) or not DATE_RE.fullmatch(raw): raise MailError("Неверная дата платежа")
@@ -242,7 +248,7 @@ class Service:
         sender,password=credentials
         date,orgs,total,xlsx=validate_payload(raw)
         # Digest includes exact XLSX content, sender, and date. Retry is explicit.
-        fingerprint=hashlib.sha256(sender.encode()+date.encode()+xlsx).hexdigest()
+        fingerprint=hashlib.sha256(json.dumps({"sender":sender,"date":date,"organizations":orgs,"total":total},ensure_ascii=False,sort_keys=True).encode("utf-8")).hexdigest()
         with self.lock:
             with db() as con:
                 found=con.execute("SELECT state FROM sent WHERE id=?",(fingerprint,)).fetchone()
