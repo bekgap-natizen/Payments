@@ -13,7 +13,7 @@ function makeSheetData(model,date,metadata={}){
   row('header','Организация / Поставщик','Долг 1С, ₽','Разнесено по поступлениям, ₽','По сроку, ₽','Будущие, ₽','Не разнесено, ₽','Утверждено, ₽','Примечание')];
  const dated=[titleRow('ВОЛМАКС · Платежи на '+fmtDate(date)+demo),
   row('section','Подтверждённый реестр · не банковское поручение'),
-  row('warning','Нажмите «+» слева от поставщика для раскрытия входящих документов; дополнительная расшифровка — лист «Документы».'),
+  row('warning','Нажмите «+» для раскрытия входящих документов'),
   row('header','Организация / Поставщик','К оплате, ₽','Документов','Дата платежа')];
  const docs=[titleRow('ВОЛМАКС · Расшифровка'+demo),
   row('section','Сальдо каждого поставщика распределено по поступлениям от новых к старым'),
@@ -58,7 +58,7 @@ function makeSheetData(model,date,metadata={}){
      dated.push(supplierRow);
      subtotalRefs.push(`C${dated.length}`);
      // In-sheet outline: supplier is the summary row ABOVE its hidden child payments.
-     // No data is hidden from the separate full-detail "Документы" sheet.
+     // All selected payment documents remain available as expandable rows here.
      for(const d of selected){
        const amount=items[d.id];
        if(!Number.isSafeInteger(amount)||amount<=0)throw Error('Неверная сумма выбранного документа');
@@ -80,5 +80,5 @@ function makeSheetData(model,date,metadata={}){
  for(const r of active.filter(r=>r.unmatchedCents>0))reconciliation.push(row('warning',r.org,r.supplier,money(r.debtCents),money(r.allocatedCents),money(r.unmatchedCents),'Долг не распределён по поступлениям'));
  if(reconciliation.length===5)reconciliation.push(row('total','Контрольные расхождения не обнаружены'));
  const day=date.slice(8,10)+'.'+date.slice(5,7)+'.'+date.slice(2,4);
- return [[day,dated],['Общая задолженность',summary],['Документы',docs],['Сверка',reconciliation]];
+ return [[day,dated]];
 }
