@@ -4,6 +4,11 @@ test('AppBox has a separate confirm-and-send button, no SMTP password or sender 
  const page=fs.readFileSync('src/ui/30-payments.js','utf8');
  const events=fs.readFileSync('src/ui/99-events.js','utf8');
  assert.match(page,/id="send-payments-mail"/);
+ assert.match(page,/id="export-payments" class="btn btn-export-excel"/);
+ assert.match(page,/id="send-payments-mail" class="btn btn-primary"/);
+ const styles=fs.readFileSync('src/styles/responsive-brand.css','utf8');
+ assert.match(styles,/#page-payments #export-payments\.btn-export-excel/);
+
  assert.match(events,/sendPaymentMail\(\)/);
  assert.doesNotMatch(source,/smtp\.yandex\.ru|app-password|mishin@volmax\.ru/);
 });
