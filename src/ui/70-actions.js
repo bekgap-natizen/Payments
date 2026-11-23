@@ -37,7 +37,7 @@ function action(k,act){const r=currentRow(k);if(!r)return toast('Нет пост
  if(r.planNeedsReview)throw Error('Изменился отчёт или отсрочка: пересоздайте выбор по документам');
  const sum=checkTotal(r,prev.items||{});if(!sum)throw Error('Сначала выберите документы галочками');
  if(paymentBlocked(r))throw Error('Долг по поставщику требует сверки');
- if(typeof budgetStore==='function'){const limit=budgetStore()[orgBudgetKey(r.org)];if(limit!==undefined){const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);const committed=model.active.filter(x=>x.org===r.org&&x.key!==r.key&&budgetLocked(x)).reduce((n,x)=>n+selectedSum(x),0);if(committed+sum>limit)throw Error('Превышен лимит организации');}}
+ // Manual approval is independent from the indicative auto-allocation budget.
  if(!confirm('Утвердить '+rub(sum)+' по '+r.supplier+'? Это локальное согласование, без перевода денег. Распределение «новые → старые» расчётное, не подтверждённое зачётами 1С.'))return;
  state.plans[planId(k)]={...prev,status:'approved',changedAt:new Date().toISOString(),sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay};saveLocal('plans',state.plans);toast('Документы утверждены для реестра');draw();return;
  }
