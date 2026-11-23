@@ -7,12 +7,12 @@ document.addEventListener('click',async e=>{
  const nav=e.target.closest('[data-page]');if(nav){navigate(nav.dataset.page);return;}
  const open=e.target.closest('[data-open-vendor]');if(open){const k=open.dataset.openVendor;state.openVendors.add(k);navigate('payments');return;}
  const load=e.target.closest('[data-load]');if(load){state.date=load.dataset.load;saveLocal('selected-date',state.date);await refreshSnapshots();navigate('payments');return;}
- if(e.target.closest('#import-button'))return importReport();if(e.target.closest('#export-payments'))return exportXlsx();
+ if(e.target.closest('#export-payments'))return exportXlsx();
  const btn=e.target.closest('[data-act]');if(btn)return action(btn.dataset.key,btn.dataset.act);
 });
 document.addEventListener('change',e=>{const el=e.target;
  if(el.id==='report-date'){state.importDate=el.value;return;}
- if(el.id==='excel-file'){const label=$('selected-file');if(label)label.textContent=el.files?.[0]?.name||'Файл не выбран';return;}
+ if(el.id==='excel-file'){const file=el.files?.[0];const label=$('selected-file');if(label)label.textContent=file?.name||'Файл не выбран';if(file)void importReport(file,state.importDate);return;}
  if(el.id==='supplier-org'){state.supplierOrg=el.value;draw();return;}
  if(el.id==='payment-org'){state.paymentOrg=el.value;draw();return;}
  if(el.id==='only-due'){state.onlyDue=el.checked;draw();return;}
