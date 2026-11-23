@@ -1,0 +1,94 @@
+name: Payments AppBox and Windows Mail Server bundle
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mail_server/**'
+      - 'src/ui/**'
+      - '.github/workflows/payments-bundle.yml'
+      - 'package.json'
+permissions:
+  contents: write
+jobs:
+  appbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and test application
+        run: npm test
+      - name: Package AppBox Standard ZIP
+        run: node scripts/package-appbox.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appbox-standard
+          path: release/VOLMAX-Payments-AppBox-Standard.zip
+  mail-server:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test mail server without sending real mail
+        run: python -m unittest discover -s mail_server -p "test_*.py" -v
+      - name: Download official embedded Python and build portable archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '3.12.10'
+          $source = "https://www.python.org/ftp/python/$version/python-$version-embed-amd64.zip"
+          New-Item -ItemType Directory -Force -Path release/mailserver/python, release/mailserver/server | Out-Null
+          Invoke-WebRequest -Uri $source -OutFile release/embedded.zip
+          Expand-Archive release/embedded.zip -DestinationPath release/mailserver/python
+          Copy-Item mail_server/server.py release/mailserver/server/server.py
+          @'
+          @echo off
+          cd /d "%~dp0"
+          echo VOLMAX Payments - Local Mail Server
+          echo The mail setup page opens in your browser.
+          "%~dp0python\python.exe" "%~dp0server\server.py"
+          if errorlevel 1 pause
+          '@ | Set-Content -Path "release/mailserver/Запустить сервер.bat" -Encoding OEM
+          Copy-Item mail_server/README.md release/mailserver/README.txt
+          Compress-Archive -Path release/mailserver/* -DestinationPath release/VOLMAX-Payments-MailServer-Windows.zip -Force
+          Write-Host "Portable ZIP bytes:" (Get-Item release/VOLMAX-Payments-MailServer-Windows.zip).Length
+      - name: Verify portable Python starts and imports required modules
+        shell: pwsh
+        run: |
+          release/mailserver/python/python.exe -c "import smtplib,ssl,sqlite3,ctypes,email,http.server;print('Portable Python OK')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mail-server-windows
+          path: release/VOLMAX-Payments-MailServer-Windows.zip
+  release:
+    needs: [appbox, mail-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: appbox-standard
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: mail-server-windows
+          path: release
+      - name: Publish both independent packages in one release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p 'require("./package.json").version')"
+          TAG="v${VERSION}-bundle.${GITHUB_RUN_NUMBER}"
+          sha256sum release/VOLMAX-Payments-*.zip > release/SHA256SUMS.txt
+          gh release create "$TAG" \
+            release/VOLMAX-Payments-AppBox-Standard.zip \
+            release/VOLMAX-Payments-MailServer-Windows.zip \
+            release/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" \
+            --title "VOLMAX Payments ${VERSION} — AppBox + локальная почта" \
+            --notes "Два независимых пакета: AppBox ZIP и Windows Portable Python mail companion. Отправка требует первоначальной настройки пароля приложения Яндекса на компьютере и разрешения браузера на localhost. SMTP не тестируется с реальной учётной записью в CI." \
+            --prerelease
