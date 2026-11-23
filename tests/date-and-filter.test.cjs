@@ -45,3 +45,20 @@ test('today uses local calendar date rather than UTC, and import date does not o
  assert.equal(vm.runInContext('state.date',c),'2026-11-16');
  assert.equal(vm.runInContext('localToday(new Date(2027,0,2,23,59))',c),'2027-01-02');
 });
+
+test('Excel selection is sufficient to begin import; manual processing button removed',()=>{
+ const htmlContext={state:{snapshots:[],importDate:'2026-11-23'},header:()=>'',esc:String,fmtDate:String};
+ vm.createContext(htmlContext);vm.runInContext(read('src/ui/50-import.js'),htmlContext);
+ const html=htmlContext.renderImport();
+ assert.match(html,/id="excel-file"/);
+ assert.match(html,/автоматически/);
+ assert.doesNotMatch(html,/id="import-button"|Обработать и сохранить/);
+ const events=read('src/ui/99-events.js');
+ assert.match(events,/if\(file\)void importReport\(file,state\.importDate\)/);
+ assert.doesNotMatch(events,/#import-button/);
+ const logic=read('src/ui/80-import-export.js');
+ assert.match(logic,/if\(importBusy\)/);
+ assert.match(logic,/input\.value=''/);
+ assert.match(logic,/old&&old\.fingerprint===fp/);
+ assert.match(logic,/old&&!confirm/);
+});
