@@ -21,5 +21,5 @@ test('overpayment rejected',()=>{ctx.state.plans[id].items[d]=60001;assert.equal
 test('mismatched snapshot excluded',()=>{ctx.state.plans[id].items[d]=12345;ctx.state.plans[id].sourceFingerprint='OLD';assert.equal(ctx.paymentSelection(calc()).cents,0)});
 ctx.state.plans[id].sourceFingerprint='F';ctx.state.plans[id].status='approved';
 test('approved partial retained',()=>assert.equal(ctx.paymentSelection(calc()).cents,12345));
-test('sheet first and one row per approved supplier',()=>{const x=E.makeSheetData(calc(),date);assert.equal(x[0][0],'16.11.26');assert.equal(x[0][1].filter(r=>r.type==='supplier').length,1);assert.equal(x[0][1].at(-1).values[2].cached,123.45);assert.equal(x[2][1].find(r=>r.values.includes('D1')).values[8],123.45)});
+test('sheet first and one row per approved supplier',()=>{const x=E.makeSheetData(calc(),date);assert.equal(x[0][0],'16.11.26');assert.equal(x[0][1].filter(r=>r.type==='supplier').length,1);assert.equal(x[0][1].at(-1).values[2].cached,123.45);assert.equal(x.length,1);assert.equal(x[0][1].find(r=>r.type==='detail').values[2],123.45)});
 ctx.state.plans[id].status='paid';test('paid local excluded from proposed re-payment',()=>{const a=calc();assert.equal(ctx.paymentSelection(a).cents,0);assert.equal(a.active[0].leftCents,47655)});
