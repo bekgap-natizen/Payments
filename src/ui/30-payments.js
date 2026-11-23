@@ -38,7 +38,7 @@ function renderPayments(model){if(!model)return header('Платежи на да
  if(state.onlyDue)rows=rows.filter(hasSelectedPayment);
  rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru'));
  const names=[...new Set(rows.map(r=>r.org))];
- return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-primary" ${selection.cents>0?'':'disabled'}>Подтвердить и выгрузить Excel</button>`)+
+ return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-primary" ${selection.cents>0?'':'disabled'}>Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn" ${selection.cents>0?'':'disabled'}>Подтвердить и отправить</button>`)+
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
  ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
