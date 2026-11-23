@@ -29,5 +29,21 @@ test('locked plans count against budget; insufficient budget leaves plans unchan
  const r=C.analyze(snapshot,date,ctx.state.settings,{}).active.find(x=>x.supplier==='Critical');
  ctx.state.plans[ctx.planId(r.key)]={status:'approved',items:{[r.allocatedDocuments[0].id]:40000},sourceFingerprint:'F',delayDays:0};
  ctx.runOrgBudget('A');assert.equal(chosen('Old'),20000);
- const prev=JSON.stringify(ctx.state.plans);input.value='399';ctx.runOrgBudget('A');assert.match(ctx.message,/Ошибка/);assert.equal(JSON.stringify(ctx.state.plans),prev);
+ input.value='399';ctx.runOrgBudget('A');assert.match(ctx.message,/Предупреждение/);assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),0);
+});
+
+test('after auto allocation manual edits can raise or lower selected total regardless of budget',()=>{
+ const {ctx,chosen}=setup();ctx.runOrgBudget('A');
+ const actions=fs.readFileSync('src/ui/70-actions.js','utf8');
+ ctx.currentRow=k=>C.analyze(snapshot,date,ctx.state.settings,ctx.state.plans).active.find(r=>r.key===k);
+ ctx.toast=msg=>{ctx.message=msg};
+ ctx.state.openVendors=new Set();
+ vm.runInContext(actions.slice(actions.indexOf('function getPlan('),actions.indexOf('function action(')),ctx);
+ const oldKey=k('Old'), oldDoc=ctx.currentRow(oldKey).allocatedDocuments[0];
+ ctx.updateDocument(oldKey,oldDoc.id,'value','500'); // exceed 600 budget together with critical 400
+ assert.equal(chosen('Old'),50000);assert.equal(chosen('Critical'),40000);
+ ctx.updateDocument(oldKey,oldDoc.id,'value','100');
+ assert.equal(chosen('Old'),10000);assert.equal(chosen('Critical'),40000);
+ const status=ctx.state.plans[ctx.planId(oldKey)].status;
+ assert.equal(status,'draft');
 });
