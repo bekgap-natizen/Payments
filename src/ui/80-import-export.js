@@ -37,5 +37,5 @@ async function exportXlsx(){if(!state.snapshot)return;
  const blob=PaymentExport.makeXlsx(exportModel,state.date,{filename:state.snapshot.name,fingerprint:state.snapshot.fingerprint});
  state.plans=next;saveLocal('plans',state.plans);draw();
  const href=URL.createObjectURL(blob),link=document.createElement('a');link.href=href;link.download='ВОЛМАКС_Платежи_'+state.date+'.xlsx';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(href),5000);
- toast('Excel сформирован: общий долг, платёжный лист, документы и сверка');
+ toast('Excel сформирован: один лист с платежами и раскрываемыми документами');
  }catch(e){toast('Ошибка экспорта: '+e.message,7500);}}
