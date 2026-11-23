@@ -8,6 +8,7 @@ document.addEventListener('click',async e=>{
  const open=e.target.closest('[data-open-vendor]');if(open){const k=open.dataset.openVendor;state.openVendors.add(k);navigate('payments');return;}
  const load=e.target.closest('[data-load]');if(load){state.date=load.dataset.load;saveLocal('selected-date',state.date);await refreshSnapshots();navigate('payments');return;}
  if(e.target.closest('#export-payments'))return exportXlsx();
+ if(e.target.closest('#send-payments-mail'))return sendPaymentMail();
  const btn=e.target.closest('[data-act]');if(btn)return action(btn.dataset.key,btn.dataset.act);
 });
 document.addEventListener('change',e=>{const el=e.target;
