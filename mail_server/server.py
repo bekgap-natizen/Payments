@@ -1,0 +1,381 @@
+"""VOLMAX Payments local Yandex SMTP companion. Python stdlib only, Windows credentials."""
+from __future__ import annotations
+import base64
+import ctypes
+from ctypes import wintypes
+from datetime import datetime
+from email.message import EmailMessage
+from html import escape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import smtplib
+import sqlite3
+import ssl
+import threading
+import time
+import webbrowser
+from urllib.parse import urlsplit
+import zipfile
+import io
+import xml.etree.ElementTree as ET
+
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("VOLMAX_MAIL_PORT", "8765"))
+ALLOWED_ORIGIN = os.environ.get("VOLMAX_APPBOX_ORIGIN", "https://volmax.duckdns.org").rstrip("/")
+HOME = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "VOLMAX" / "PaymentsMail"
+HOME.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE = HOME / "settings.json"
+DB_FILE = HOME / "sent.sqlite3"
+TARGET = "VOLMAX.Payments.Yandex.SMTP"
+SMTP_HOST = "smtp.yandex.ru"
+RECIPIENTS = (
+    "alexander@volmax.ru", "grishin@volmax.ru",
+    "ilina@volmax.ru", "gamova@volmax.ru",
+)
+MAX_BODY = 9 * 1024 * 1024
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+API_VERSION = 1
+
+class MailError(Exception):
+    pass
+
+class CredentialStore:
+    """Use Windows Credential Manager (DPAPI-backed), never JSON for secrets."""
+    def __init__(self):
+        if os.name != "nt":
+            raise MailError("Хранение пароля поддерживается только в Windows")
+        self.advapi = ctypes.WinDLL("Advapi32", use_last_error=True)
+        self.advapi.CredWriteW.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        self.advapi.CredWriteW.restype = wintypes.BOOL
+        self.advapi.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+        self.advapi.CredReadW.restype = wintypes.BOOL
+        self.advapi.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+        self.advapi.CredDeleteW.restype = wintypes.BOOL
+        self.advapi.CredFree.argtypes = [ctypes.c_void_p]
+        class CREDENTIAL(ctypes.Structure):
+            _fields_ = [("Flags",wintypes.DWORD),("Type",wintypes.DWORD),
+                ("TargetName",wintypes.LPWSTR),("Comment",wintypes.LPWSTR),
+                ("LastWritten",wintypes.FILETIME),("CredentialBlobSize",wintypes.DWORD),
+                ("CredentialBlob",ctypes.POINTER(ctypes.c_byte)),("Persist",wintypes.DWORD),
+                ("AttributeCount",wintypes.DWORD),("Attributes",ctypes.c_void_p),
+                ("TargetAlias",wintypes.LPWSTR),("UserName",wintypes.LPWSTR)]
+        self.CREDENTIAL = CREDENTIAL
+    def save(self, email, password):
+        raw = password.encode("utf-16-le")
+        if len(raw) > 2560: raise MailError("Пароль слишком длинный")
+        buf = ctypes.create_string_buffer(raw)
+        c = self.CREDENTIAL()
+        c.Type = 1  # CRED_TYPE_GENERIC
+        c.TargetName = TARGET
+        c.UserName = email
+        c.Persist = 2  # CRED_PERSIST_LOCAL_MACHINE, protected for current user
+        c.CredentialBlobSize = len(raw)
+        c.CredentialBlob = ctypes.cast(buf,ctypes.POINTER(ctypes.c_byte))
+        if not self.advapi.CredWriteW(ctypes.byref(c),0): raise MailError("Не удалось сохранить пароль Windows")
+    def load(self):
+        ptr = ctypes.c_void_p()
+        if not self.advapi.CredReadW(TARGET,1,0,ctypes.byref(ptr)): return None
+        try:
+            c = ctypes.cast(ptr,ctypes.POINTER(self.CREDENTIAL)).contents
+            password=ctypes.string_at(c.CredentialBlob,c.CredentialBlobSize).decode("utf-16-le")
+            return c.UserName,password
+        finally: self.advapi.CredFree(ptr)
+    def delete(self):
+        self.advapi.CredDeleteW(TARGET,1,0)
+
+def settings():
+    try: return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError,ValueError): return {}
+
+def save_settings(data):
+    tmp=SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
+    os.replace(tmp,SETTINGS_FILE)
+
+def db():
+    con=sqlite3.connect(DB_FILE,timeout=12)
+    con.execute("""CREATE TABLE IF NOT EXISTS sent(
+     id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, sender TEXT NOT NULL,
+     payment_date TEXT NOT NULL, total_cents INTEGER NOT NULL, state TEXT NOT NULL,
+     error TEXT NOT NULL DEFAULT '')""")
+    con.commit()
+    return con
+
+def canonical_date(raw):
+    if not isinstance(raw,str) or not DATE_RE.fullmatch(raw): raise MailError("Неверная дата платежа")
+    try: return datetime.strptime(raw,"%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError: raise MailError("Неверная дата платежа")
+
+def money(cents):
+    return f"{cents / 100:,.2f}".replace(",", " ").replace(".", ",")
+
+def validate_payload(raw):
+    """Never accept HTML supplied by AppBox; derive mail body on localhost."""
+    if not isinstance(raw,dict): raise MailError("Некорректный запрос")
+    date=canonical_date(raw.get("date"))
+    orgs=raw.get("organizations")
+    if not isinstance(orgs,list) or not 0<len(orgs)<=20: raise MailError("Нет организаций")
+    clean=[]; grand=0
+    for org in orgs:
+        if not isinstance(org,dict): raise MailError("Неверная организация")
+        name=org.get("name")
+        suppliers=org.get("suppliers")
+        if not isinstance(name,str) or not 0<len(name)<=200 or not isinstance(suppliers,list) or not suppliers or len(suppliers)>1500:
+            raise MailError("Некорректная структура организаций")
+        summary=[]; subtotal=0
+        for supplier in suppliers:
+            if not isinstance(supplier,dict): raise MailError("Неверный поставщик")
+            title=supplier.get("name"); amount=supplier.get("cents")
+            if not isinstance(title,str) or not 0<len(title)<=300 or type(amount) is not int or not 0<amount<10**13:
+                raise MailError("Некорректная сумма или название поставщика")
+            summary.append((title,amount));subtotal+=amount
+        clean.append((name,summary,subtotal));grand+=subtotal
+    if type(raw.get("totalCents")) is not int or grand!=raw["totalCents"]:
+        raise MailError("Итог письма не совпадает с реестром")
+    encoded=raw.get("xlsxBase64")
+    if not isinstance(encoded,str) or len(encoded)>MAX_BODY: raise MailError("Excel не приложен либо слишком велик")
+    try: xlsx=base64.b64decode(encoded,validate=True)
+    except Exception: raise MailError("Ошибка кодирования Excel")
+    check_xlsx(xlsx,grand)
+    return date,clean,grand,xlsx
+
+def check_xlsx(contents,total_cents):
+    """Reject ZIP bombs and validate cached grand total on the sole worksheet."""
+    if len(contents)>6_000_000 or not zipfile.is_zipfile(io.BytesIO(contents)): raise MailError("Неверный файл Excel")
+    ns={"m":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    try:
+        with zipfile.ZipFile(io.BytesIO(contents)) as z:
+            paths=set(z.namelist())
+            if not {"xl/workbook.xml","xl/worksheets/sheet1.xml"}.issubset(paths):
+                raise MailError("Отсутствует лист платежей")
+            if any(p.startswith("xl/worksheets/sheet") and p!="xl/worksheets/sheet1.xml" for p in paths):
+                raise MailError("Ожидался Excel с одним листом")
+            if sum(i.file_size for i in z.infolist())>24_000_000: raise MailError("Слишком большой файл Excel")
+            root=ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+        rows=root.findall(".//m:sheetData/m:row",ns)
+        matched=False
+        for row in rows:
+            b=row.find("./m:c[@r='B"+str(row.attrib["r"])+"']/m:is/m:t",ns)
+            if b is None or b.text!="ВСЕГО К ОПЛАТЕ": continue
+            value=row.find("./m:c[@r='C"+str(row.attrib["r"])+"']/m:v",ns)
+            if value is None or round(float(value.text)*100)!=total_cents:
+                raise MailError("Итог Excel отличается от суммы письма")
+            matched=True;break
+        if not matched: raise MailError("Не найден итоговый платёж в Excel")
+    except (zipfile.BadZipFile,ET.ParseError,ValueError,KeyError) as e:
+        raise MailError("Excel повреждён или имеет неверный формат") from e
+
+def render_mail(payment_date,orgs,grand):
+    styles="border-collapse:collapse;width:100%;font:14px Arial,sans-serif"
+    cell="border:1px solid #dce5ed;padding:8px 10px"
+    segments=["<p>Добрый день!</p><p>Направляю реестр платежей на "+escape(payment_date)+".</p>"]
+    plain=["Добрый день!","Платежи на "+payment_date]
+    for name,suppliers,subtotal in orgs:
+        segments.append("<h3>"+escape(name)+"</h3><table style='"+styles+"'><tr><th style='"+cell+";text-align:left'>Поставщик</th><th style='"+cell+";text-align:right'>К оплате, ₽</th></tr>")
+        plain.append("\n"+name)
+        for supplier,amount in suppliers:
+            segments.append("<tr><td style='"+cell+"'>"+escape(supplier)+"</td><td style='"+cell+";text-align:right'>"+money(amount)+"</td></tr>")
+            plain.append(supplier+" — "+money(amount)+" ₽")
+        segments.append("<tr><td style='"+cell+"'><b>ИТОГО "+escape(name)+"</b></td><td style='"+cell+";text-align:right'><b>"+money(subtotal)+"</b></td></tr></table>")
+        plain.append("ИТОГО "+name+": "+money(subtotal)+" ₽")
+    segments.append("<p><b>ВСЕГО К ОПЛАТЕ: "+money(grand)+" ₽</b></p><p>Вложение: Excel с детализацией входящих документов.</p>")
+    plain.append("ВСЕГО К ОПЛАТЕ: "+money(grand)+" ₽")
+    return "\n".join(plain),"".join(segments)
+
+def compose(sender,date,orgs,total,xlsx):
+    msg=EmailMessage()
+    msg["From"]=sender
+    msg["To"]=", ".join(RECIPIENTS)
+    msg["Subject"]="Платежи на "+date
+    msg["X-VOLMAX-Application"]="Payments"
+    plain,html=render_mail(date,orgs,total)
+    msg.set_content(plain)
+    msg.add_alternative(html,subtype="html")
+    msg.add_attachment(xlsx,maintype="application",subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       filename="ВОЛМАКС_Платежи_"+date.replace(".","-")+".xlsx")
+    return msg
+
+class Service:
+    def __init__(self,store=None,smtp_factory=None):
+        self.store=store if store is not None else CredentialStore()
+        self.smtp_factory=smtp_factory or smtplib.SMTP_SSL
+        self.session_tokens=set()
+        self.pair_code=f"{secrets.randbelow(10**6):06d}"
+        self.pair_until=time.monotonic()+900
+        self.pair_tries=0
+        self.lock=threading.Lock()
+        with db() as con: pass
+    def credentials(self): return self.store.load()
+    def configured_email(self):
+        cred=self.credentials()
+        return cred[0] if cred else None
+    def set_account(self,email,password):
+        if not isinstance(email,str) or not EMAIL_RE.fullmatch(email) or len(email)>254:
+            raise MailError("Неверный адрес электронной почты")
+        if not isinstance(password,str) or not 0<len(password)<=1024:
+            raise MailError("Укажите пароль приложения Яндекса")
+        with self.smtp_factory(SMTP_HOST,465,context=ssl.create_default_context(),timeout=15) as smtp:
+            smtp.login(email,password)
+        self.store.save(email,password)
+        self.session_tokens.clear()
+    def pair(self,code):
+        with self.lock:
+            if self.pair_tries>=8: raise MailError("Слишком много попыток. Перезапустите локальный сервер")
+            self.pair_tries+=1
+            if time.monotonic()>self.pair_until or not isinstance(code,str) or not secrets.compare_digest(code,self.pair_code):
+                raise MailError("Неверный или устаревший код подключения")
+            token=secrets.token_urlsafe(32)
+            self.session_tokens.add(token)
+            self.pair_tries=0
+            self.pair_code=f"{secrets.randbelow(10**6):06d}"
+            self.pair_until=time.monotonic()+900
+            return token
+    def send(self,raw,force=False):
+        credentials=self.credentials()
+        if credentials is None: raise MailError("Сначала настройте почту в локальном сервере")
+        sender,password=credentials
+        date,orgs,total,xlsx=validate_payload(raw)
+        # Digest includes exact XLSX content, sender, and date. Retry is explicit.
+        fingerprint=hashlib.sha256(sender.encode()+date.encode()+xlsx).hexdigest()
+        with self.lock:
+            with db() as con:
+                found=con.execute("SELECT state FROM sent WHERE id=?",(fingerprint,)).fetchone()
+                if found and not force: raise MailError("Этот реестр уже отправлялся или отправка была начата. Повтор требует отдельного подтверждения")
+                con.execute("INSERT OR REPLACE INTO sent(id,timestamp,sender,payment_date,total_cents,state,error) VALUES(?,?,?,?,?,?,?)",
+                    (fingerprint,datetime.now().isoformat(timespec="seconds"),sender,date,total,"attempted",""))
+                con.commit()
+            try:
+                msg=compose(sender,date,orgs,total,xlsx)
+                with self.smtp_factory(SMTP_HOST,465,context=ssl.create_default_context(),timeout=30) as smtp:
+                    smtp.login(sender,password)
+                    refused=smtp.send_message(msg)
+                    if refused: raise MailError("SMTP отказал одному или нескольким адресатам")
+            except Exception:
+                with db() as con: con.execute("UPDATE sent SET state='unknown',error='SMTP failed or delivery uncertain' WHERE id=?",(fingerprint,))
+                raise MailError("Отправка не подтверждена. Проверьте папку «Отправленные» Яндекса перед повтором")
+            with db() as con:
+                con.execute("UPDATE sent SET state='accepted' WHERE id=?",(fingerprint,))
+            return {"ok":True,"status":"accepted","sender":sender,"recipients":list(RECIPIENTS),"totalCents":total,
+                    "note":"SMTP принял письмо; это не гарантия доставки в ящики"}
+
+def make_handler(service):
+    class Handler(BaseHTTPRequestHandler):
+        server_version="VOLMAX-Mail/1.0"
+        def log_message(self,format,*args):
+            # Never log POST bodies, credentials or auth headers.
+            print(f"[HTTP] {self.command} {urlsplit(self.path).path}",flush=True)
+        def _host_ok(self):
+            return self.headers.get("Host","") in {f"127.0.0.1:{PORT}",f"localhost:{PORT}"}
+        def _app_origin(self): return self.headers.get("Origin","")==ALLOWED_ORIGIN
+        def _admin_origin(self): return self.headers.get("Origin","")==f"http://127.0.0.1:{PORT}"
+        def _json(self,status,data,external=False):
+            body=json.dumps(data,ensure_ascii=False).encode()
+            self.send_response(status)
+            self.send_header("Content-Type","application/json; charset=utf-8")
+            self.send_header("Content-Length",str(len(body)))
+            self.send_header("Cache-Control","no-store")
+            self.send_header("X-Content-Type-Options","nosniff")
+            if external:
+                self.send_header("Access-Control-Allow-Origin",ALLOWED_ORIGIN)
+                self.send_header("Vary","Origin")
+                self.send_header("Access-Control-Allow-Private-Network","true")
+            self.end_headers();self.wfile.write(body)
+        def _read(self):
+            if self.headers.get("Content-Type","").split(";")[0]!="application/json":
+                raise MailError("Ожидается JSON")
+            try: size=int(self.headers.get("Content-Length","0"))
+            except ValueError: raise MailError("Неверная длина запроса")
+            if size<=0 or size>MAX_BODY: raise MailError("Неверный размер запроса")
+            return json.loads(self.rfile.read(size))
+        def _auth(self):
+            supplied=self.headers.get("X-Payments-Token","")
+            return bool(supplied) and any(secrets.compare_digest(supplied,t) for t in service.session_tokens)
+        def do_OPTIONS(self):
+            if not self._host_ok(): return self._json(403,{"error":"Host denied"})
+            if not self._app_origin() or self.path not in ("/v1/status","/v1/pair","/v1/send"):
+                return self._json(403,{"error":"Origin denied"})
+            self.send_response(204);self.send_header("Access-Control-Allow-Origin",ALLOWED_ORIGIN)
+            self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers","Content-Type, X-Payments-Token")
+            self.send_header("Access-Control-Allow-Private-Network","true")
+            self.send_header("Access-Control-Max-Age","300");self.send_header("Vary","Origin")
+            self.end_headers()
+        def do_GET(self):
+            if not self._host_ok(): return self._json(403,{"error":"Host denied"})
+            if self.path=="/v1/status":
+                if not self._app_origin():return self._json(403,{"error":"Origin denied"})
+                authorized=self._auth()
+                return self._json(200,{"version":API_VERSION,"ready":bool(service.credentials()),
+                    "paired":authorized,"sender":service.configured_email() if authorized else None},True)
+            if self.path not in ("/","/local"): return self._json(404,{"error":"Not found"})
+            page=admin_html(service)
+            data=page.encode()
+            self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",str(len(data)))
+            self.send_header("Cache-Control","no-store")
+            self.send_header("Content-Security-Policy","default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header("X-Frame-Options","DENY")
+            self.send_header("X-Content-Type-Options","nosniff")
+            self.end_headers();self.wfile.write(data)
+        def do_POST(self):
+            if not self._host_ok(): return self._json(403,{"error":"Host denied"})
+            external=self.path.startswith("/v1/")
+            if external and not self._app_origin():return self._json(403,{"error":"Origin denied"})
+            if not external and not self._admin_origin():return self._json(403,{"error":"Origin denied"})
+            try:
+                data=self._read()
+                if self.path=="/v1/pair":
+                    if not service.credentials(): raise MailError("Сначала настройте почту в окне локального сервера")
+                    return self._json(200,{"token":service.pair(data.get("code")),"apiVersion":API_VERSION},True)
+                if self.path=="/v1/send":
+                    if not self._auth():return self._json(401,{"error":"Подключите локальный сервер заново"},True)
+                    return self._json(200,service.send(data,force=data.get("force") is True),True)
+                if self.path=="/local/configure":
+                    if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN):
+                        raise MailError("Недействительный запрос настройки")
+                    service.set_account(data.get("email"),data.get("password"))
+                    return self._json(200,{"ok":True,"sender":service.configured_email()})
+                if self.path=="/local/delete":
+                    if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
+                    service.store.delete();service.session_tokens.clear()
+                    return self._json(200,{"ok":True})
+                return self._json(404,{"error":"Not found"},external)
+            except MailError as e: return self._json(400,{"error":str(e)},external)
+            except (ValueError,TypeError,json.JSONDecodeError):return self._json(400,{"error":"Некорректный запрос"},external)
+            except Exception:
+                return self._json(500,{"error":"Серверная ошибка. Проверьте журнал консоли"},external)
+    return Handler
+
+SETUP_TOKEN=secrets.token_urlsafe(32)
+def admin_html(service):
+    sender=service.configured_email() or "не настроен"
+    return """<!doctype html><html lang="ru"><meta charset="utf-8"><title>VOLMAX Mail Server</title>
+<style>body{font:15px Arial;background:#eef3f7;margin:0;padding:24px;color:#1e3449}main{max-width:480px;margin:auto;background:white;border-radius:16px;padding:28px;box-shadow:0 4px 22px #aaa5}label{display:block;margin:16px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;font-size:15px;border:1px solid #ccd6e1;border-radius:8px}button{margin-top:15px;background:#066fa9;color:white;cursor:pointer}small{color:#597084}#msg{margin-top:15px;white-space:pre-line}</style>
+<main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
+<p>Код подключения для AppBox: <strong>"""+service.pair_code+"""</strong></p>
+<small>Код действует 15 минут. После подключения потребуется новый код.</small>
+<label>Корпоративная почта Яндекс</label><input id="email" type="email" autocomplete="username" placeholder="user@volmax.ru">
+<label>Пароль приложения Яндекс (не пароль от аккаунта)</label><input id="password" type="password" autocomplete="new-password">
+<button id="save">Проверить Яндекс и сохранить</button><button id="delete" style="background:#526776">Удалить сохранённый аккаунт</button>
+<div id="msg" role="status"></div><p><small>Пароль хранится в Диспетчере учётных данных Windows и не отправляется в AppBox. SMTP: smtp.yandex.ru:465.</small></p></main>
+<script>const token="""+json.dumps(SETUP_TOKEN)+""";async function call(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Setup-Token':token},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.error);return j}
+document.getElementById('save').onclick=async()=>{const out=document.getElementById('msg');out.textContent='Проверяем...';try{await call('/local/configure',{email:document.getElementById('email').value,password:document.getElementById('password').value});out.textContent='Подключение проверено. Данные сохранены. Обновите страницу.';document.getElementById('password').value=''}catch(e){out.textContent=e.message}};
+document.getElementById('delete').onclick=async()=>{if(!confirm('Удалить почтовые настройки?'))return;try{await call('/local/delete',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};</script></html>"""
+
+def main():
+    service=Service()
+    httpd=ThreadingHTTPServer((HOST,PORT),make_handler(service))
+    print(f"VOLMAX Mail Server: http://{HOST}:{PORT}/",flush=True)
+    print(f"Код подключения AppBox: {service.pair_code}",flush=True)
+    webbrowser.open(f"http://{HOST}:{PORT}/")
+    try: httpd.serve_forever()
+    except KeyboardInterrupt: pass
+    finally: httpd.server_close()
+
+if __name__=="__main__": main()
