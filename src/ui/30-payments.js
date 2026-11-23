@@ -53,7 +53,7 @@ function priorityStore(){return typeof readLocal==='function'?readLocal('allocat
 function budgetLocked(r){return !r.planNeedsReview&&['approved','paid'].includes(r.plan.status);}
 function budgetPanel(model,orgs){
  const budgets=budgetStore(), priorities=priorityStore();
- return '<div class="card" style="padding:16px;margin-bottom:16px"><h2>Автораспределение по организациям</h2><p>Плановая сумма по каждому юрлицу ограничивает только автораспределение, но не ручные платежи и Excel-выгрузку. Утверждённые и оплаченные суммы учитываются при новом автораспределении. Спорные документы требуют сверки.</p>'+
+ return '<div class="card" style="padding:16px;margin-bottom:16px"><h2>Автораспределение по организациям — рекомендательный план</h2><p>Автораспределение предлагает суммы, но не запрещает вручную изменять поставщиков, документы или суммы как внутри плана, так и сверх него. Ограничение выделенной суммы применяется только при расчёте предложения. Утверждённые и оплаченные платежи не перезаписываются. Спорные документы требуют сверки 1С.</p>'+
  orgs.map(org=>{
  const rr=model.active.filter(r=>r.org===org), b=budgets[orgBudgetKey(org)], selected=rr.reduce((n,r)=>n+(budgetLocked(r)||!paymentBlocked(r)?selectedSum(r):0),0), excess=b===undefined?0:Math.max(0,selected-b);
  return '<div style="border-top:1px solid #ccc;padding:12px 0"><b>'+esc(org)+'</b><div class="toolbar"><div class="field"><label>Выделено, ₽</label><input class="control" inputmode="decimal" data-budget-org="'+esc(org)+'" value="'+esc(state.budgetInput?.[orgBudgetKey(org)]??(b===undefined?'':currencyInput(b)))+'"></div><button class="btn btn-primary" data-auto-org="'+esc(org)+'">Распределить</button><span>Выбрано: <b>'+rub(selected)+'</b> · Остаток: <b>'+(b===undefined?'—':rub(b-selected))+'</b>'+(excess?'<span class="badge badge-warn">Сверх плана: '+rub(excess)+' — ручная оплата разрешена</span>':'')+'</span></div><details><summary>Приоритеты поставщиков</summary>'+rr.map(r=>'<div class="toolbar"><span>'+esc(r.supplier)+'</span><select class="control" data-budget-priority="'+esc(r.key)+'">'+[['critical','Критический'],['normal','По сроку'],['blocked','Исключить']].map(([v,l])=>'<option value="'+v+'" '+((priorities[r.key]||'normal')===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div>').join('')+'</details></div>';
@@ -66,16 +66,16 @@ function runOrgBudget(org){
  const model=C.analyze(state.snapshot,state.date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
  if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
  const locked=rr.filter(budgetLocked).reduce((n,r)=>n+selectedSum(r),0);
- if(locked>b)throw Error('Лимит меньше уже утверждённых и оплаченных сумм: '+rub(locked));
+ const committedExcess=Math.max(0,locked-b);
  const candidates=rr.filter(r=>!budgetLocked(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
  candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
- if(!confirm('Пересчитать черновики только по '+org+'? Лимит '+rub(b)+'. Ручной выбор в этой организации будет заменён, утверждённые и оплаченные суммы останутся.'))return;
- let left=b-locked;const next={...state.plans}, plans=new Map();
+ if(!confirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Текущие неутверждённые суммы будут заменены; после распределения любые платежи можно менять вручную. Утверждённые и оплаченные суммы сохранятся.'))return;
+ let left=Math.max(0,b-locked);const next={...state.plans}, plans=new Map();
  for(const r of rr.filter(r=>!budgetLocked(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
  for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}
  for(const r of rr.filter(r=>plans.has(r.key))){const p=plans.get(r.key);checkTotal(r,p.items);next[planId(r.key)]=p;}
  const budgets=budgetStore();budgets[orgBudgetKey(org)]=b;if(state.budgetInput)delete state.budgetInput[orgBudgetKey(org)];
- state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast('Распределено с учётом ранее утверждённых и оплаченных: '+rub(b-left)+'. Свободно: '+rub(left));
+ state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast(committedExcess?'Предупреждение: ранее утверждено сверх плана на '+rub(committedExcess)+'. Новых сумм автоматически не добавлено; ручные платежи доступны.':'Автораспределение предложено. Доступно для ручной корректировки. Свободно по плану: '+rub(left));
  }catch(e){toast('Ошибка: '+e.message,7500);}
 }
 if(typeof document!=='undefined')document.addEventListener('input',e=>{const org=e.target.dataset.budgetOrg;if(org){(state.budgetInput??={})[orgBudgetKey(org)]=e.target.value;}});
