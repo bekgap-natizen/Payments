@@ -9,7 +9,7 @@ function setup(){
  const settings=Object.fromEntries(snapshot.organizations.flatMap(o=>o.suppliers.map(s=>[k(s.name,o.name),{tracked:true,delay:0}])));
  const storage={'allocation-priorities':{[k('Critical')]:'critical',[k('Blocked')]:'blocked'}};
  const input={dataset:{budgetOrg:'A'},value:'600'};
- const ctx={C,state:{date,snapshot,settings,plans:{}},document:{addEventListener(){},querySelectorAll(){return [input]}},readLocal:(key,def)=>storage[key]??def,saveLocal:(key,v)=>{storage[key]=v},planId:key=>date+'¦'+key,confirm:()=>true,rub:String,draw(){},toast(msg){ctx.message=msg},console};
+ const ctx={C,state:{date,snapshot,settings,plans:{}},document:{addEventListener(){},querySelectorAll(){return [input]}},readLocal:(key,def)=>storage[key]??def,saveLocal:(key,v)=>{storage[key]=v},planId:key=>date+'¦'+key,appConfirm:async()=>true,currencyInput:n=>(n/100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,' ').replace('.',','),rub:String,draw(){},toast(msg){ctx.message=msg},console};
  vm.createContext(ctx);
  vm.runInContext(fs.readFileSync('src/ui/55-due-drafts.js','utf8'),ctx);
  const actions=fs.readFileSync('src/ui/70-actions.js','utf8');vm.runInContext(actions.slice(actions.indexOf('function checkTotal('),actions.indexOf('function updateDocument(')),ctx);
@@ -17,23 +17,23 @@ function setup(){
  const chosen=(name,org='A')=>Object.values(ctx.state.plans[ctx.planId(k(name,org))]?.items||{}).reduce((a,b)=>a+b,0);
  return {ctx,storage,input,chosen};
 }
-test('budget prioritizes critical then old invoices, allows partial, excludes future and blocked, preserves other org',()=>{
+test('budget prioritizes critical then old invoices, allows partial, excludes future and blocked, preserves other org',async()=>{
  const {ctx,storage,chosen}=setup();
  ctx.state.plans[ctx.planId(k('Other','B'))]={items:{x:900},status:'draft'};
- ctx.runOrgBudget('A');
+ await ctx.runOrgBudget('A');
  assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),20000);assert.equal(chosen('Today'),0);assert.equal(chosen('Future'),0);assert.equal(chosen('Blocked'),0);assert.equal(chosen('Other','B'),900);
  assert.equal(storage['org-budgets'][date+'¦A'],60000);
 });
-test('locked plans count against budget; insufficient budget leaves plans unchanged',()=>{
+test('locked plans count against budget; insufficient budget leaves plans unchanged',async()=>{
  const {ctx,input,chosen}=setup();
  const r=C.analyze(snapshot,date,ctx.state.settings,{}).active.find(x=>x.supplier==='Critical');
  ctx.state.plans[ctx.planId(r.key)]={status:'approved',items:{[r.allocatedDocuments[0].id]:40000},sourceFingerprint:'F',delayDays:0};
- ctx.runOrgBudget('A');assert.equal(chosen('Old'),20000);
- input.value='399';ctx.runOrgBudget('A');assert.match(ctx.message,/Предупреждение/);assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),0);
+ await ctx.runOrgBudget('A');assert.equal(chosen('Old'),20000);
+ input.value='399';await ctx.runOrgBudget('A');assert.match(ctx.message,/Предупреждение/);assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),0);
 });
 
-test('after auto allocation manual edits can raise or lower selected total regardless of budget',()=>{
- const {ctx,chosen}=setup();ctx.runOrgBudget('A');
+test('after auto allocation manual edits can raise or lower selected total regardless of budget',async()=>{
+ const {ctx,chosen}=setup();await ctx.runOrgBudget('A');
  const actions=fs.readFileSync('src/ui/70-actions.js','utf8');
  ctx.currentRow=k=>C.analyze(snapshot,date,ctx.state.settings,ctx.state.plans).active.find(r=>r.key===k);
  ctx.toast=msg=>{ctx.message=msg};
