@@ -73,3 +73,9 @@
   #page-payments .vendor-metrics>span{font-size:11px}
   .topbar .snapshot-pill{max-width:104px}
 }
+
+/* Native browser modal dialogs are blocked in some embedded AppBox frames. */
+.app-dialog-overlay{position:fixed;inset:0;z-index:1000;background:rgba(12,33,52,.48);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+.app-dialog{width:min(100%,520px);max-height:90vh;overflow:auto;background:#fff;padding:24px;border:1px solid #dbe6ef;border-radius:14px;box-shadow:0 16px 54px rgba(12,33,52,.25);color:#20384f}
+.app-dialog h2{font-size:20px;margin:0 0 12px}.app-dialog-message{white-space:pre-wrap;line-height:1.55;margin:0 0 18px}
+.app-dialog-field input{width:100%;margin-bottom:16px}.app-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}
