@@ -82,3 +82,34 @@ test('uncertain fetch failure never retries a send POST automatically',async()=>
  await assert.rejects(ctx.mailFetch('/v1/send',{totalCents:1},'token'),/network failure/);
  assert.equal(calls,1);
 });
+
+test('running server is reused without opening external protocol',async()=>{
+ const ctx={};vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailProbe=async()=>({ready:true,paired:true});
+ ctx.mailLaunchProtocol=()=>{throw Error('unexpected launch')};
+ assert.equal((await ctx.mailEnsureServer('token')).ready,true);
+});
+test('offline server launches once and waits for readiness',async()=>{
+ let probes=0, launches=0;
+ const ctx={TypeError,setTimeout:fn=>{fn();},$:()=>null,navigator:{userActivation:{isActive:true}}};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailProbe=async()=>{if(++probes<3)throw new TypeError('offline');return {ready:true,paired:true};};
+ ctx.mailLaunchProtocol=()=>{launches++;};
+ assert.equal((await ctx.mailEnsureServer('token')).ready,true);
+ assert.equal(launches,1);assert.equal(probes,3);
+});
+test('expired browser activation requests a fresh click; cancellation never launches',async()=>{
+ const ctx={TypeError,navigator:{userActivation:{isActive:false}},appDialog:async()=>false};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailProbe=async()=>{throw new TypeError('offline');};
+ ctx.mailLaunchProtocol=()=>{throw Error('unexpected launch');};
+ assert.equal(await ctx.mailEnsureServer('token'),null);
+});
+test('startup deadline reports failure without sending payment',async()=>{
+ let now=0,launches=0;
+ const ctx={TypeError,Date:{now:()=>now},setTimeout:fn=>{now+=5000;fn();},$:()=>null};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailProbe=async()=>{throw new TypeError('offline');};ctx.mailLaunchProtocol=()=>{launches++;};
+ await assert.rejects(ctx.mailEnsureServer('token'),/Mail Server не ответил/);
+ assert.equal(launches,1);
+});
