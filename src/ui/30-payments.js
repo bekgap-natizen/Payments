@@ -38,7 +38,7 @@ function renderPayments(model){if(!model)return header('Платежи на да
  if(state.onlyDue)rows=rows.filter(hasSelectedPayment);
  rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru'));
  const names=[...new Set(rows.map(r=>r.org))];
- return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-export-excel" ${selection.cents>0?'':'disabled'}>Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn btn-primary" ${selection.cents>0?'':'disabled'}>Подтвердить и отправить</button>`)+
+ return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-export-excel">Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn btn-primary">Подтвердить и отправить</button>`)+
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
  ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
@@ -56,31 +56,33 @@ function budgetPanel(model,orgs){
  return '<div class="card" style="padding:16px;margin-bottom:16px"><h2>Автораспределение по организациям — рекомендательный план</h2><p>Автораспределение предлагает суммы, но не запрещает вручную изменять поставщиков, документы или суммы как внутри плана, так и сверх него. Ограничение выделенной суммы применяется только при расчёте предложения. Утверждённые и оплаченные платежи не перезаписываются. Спорные документы требуют сверки 1С.</p>'+
  orgs.map(org=>{
  const rr=model.active.filter(r=>r.org===org), b=budgets[orgBudgetKey(org)], selected=rr.reduce((n,r)=>n+(budgetLocked(r)||!paymentBlocked(r)?selectedSum(r):0),0), excess=b===undefined?0:Math.max(0,selected-b);
- return '<div style="border-top:1px solid #ccc;padding:12px 0"><b>'+esc(org)+'</b><div class="toolbar"><div class="field"><label>Выделено, ₽</label><input class="control" inputmode="decimal" data-budget-org="'+esc(org)+'" value="'+esc(state.budgetInput?.[orgBudgetKey(org)]??(b===undefined?'':currencyInput(b)))+'"></div><button class="btn btn-primary" data-auto-org="'+esc(org)+'">Распределить</button><span>Выбрано: <b>'+rub(selected)+'</b> · Остаток: <b>'+(b===undefined?'—':rub(b-selected))+'</b>'+(excess?'<span class="badge badge-warn">Сверх плана: '+rub(excess)+' — ручная оплата разрешена</span>':'')+'</span></div><details><summary>Приоритеты поставщиков</summary>'+rr.map(r=>'<div class="toolbar"><span>'+esc(r.supplier)+'</span><select class="control" data-budget-priority="'+esc(r.key)+'">'+[['critical','Критический'],['normal','По сроку'],['blocked','Исключить']].map(([v,l])=>'<option value="'+v+'" '+((priorities[r.key]||'normal')===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div>').join('')+'</details></div>';
+ const excluded=(model.rows||model.active).filter(r=>r.org===org&&r.debtCents>0).map(r=>({name:r.supplier,reason:!r.tracked&&r.tracked!==undefined?'Не включён в действующих поставщиков':budgetLocked(r)?'Уже утверждён или оплачен':priorities[r.key]==='blocked'?'Исключён из авторасчёта':paymentBlocked(r)?'Требуется сверка: '+(r.flags||[]).join('; '):r.dueCents===0?'Срок оплаты не наступил':''})).filter(x=>x.reason);
+ const explain=excluded.length?'<details><summary>Почему отдельные поставщики не распределяются ('+excluded.length+')</summary>'+excluded.map(x=>'<p class="fine">'+esc(x.name)+' — '+esc(x.reason)+'</p>').join('')+'</details>':'';
+ return '<div style="border-top:1px solid #ccc;padding:12px 0"><b>'+esc(org)+'</b><div class="toolbar"><div class="field"><label>Выделено, ₽</label><input class="control" inputmode="decimal" data-budget-org="'+esc(org)+'" value="'+esc(state.budgetInput?.[orgBudgetKey(org)]??(b===undefined?'':currencyInput(b)))+'"></div><button class="btn btn-primary" data-auto-org="'+esc(org)+'">Распределить</button><span>Выбрано: <b>'+rub(selected)+'</b> · Остаток: <b>'+(b===undefined?'—':rub(b-selected))+'</b>'+(excess?'<span class="badge badge-warn">Сверх плана: '+rub(excess)+' — ручная оплата разрешена</span>':'')+'</span></div><details><summary>Приоритеты поставщиков</summary>'+rr.map(r=>'<div class="toolbar"><span>'+esc(r.supplier)+'</span><select class="control" data-budget-priority="'+esc(r.key)+'">'+[['critical','Критический'],['normal','По сроку'],['blocked','Исключить']].map(([v,l])=>'<option value="'+v+'" '+((priorities[r.key]||'normal')===v?'selected':'')+'>'+l+'</option>').join('')+'</select></div>').join('')+'</details>'+explain+'</div>';
  }).join('')+'</div>';
 }
-function runOrgBudget(org){
+async function runOrgBudget(org){
  try{
  const input=[...document.querySelectorAll('[data-budget-org]')].find(x=>x.dataset.budgetOrg===org);
  const b=C.cents(input?.value);if(!input?.value.trim()||!Number.isSafeInteger(b)||b<0)throw Error('Укажите неотрицательный лимит организации');
+ input.value=currencyInput(b);(state.budgetInput??={})[orgBudgetKey(org)]=input.value;
  const model=C.analyze(state.snapshot,state.date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
  if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
  const locked=rr.filter(budgetLocked).reduce((n,r)=>n+selectedSum(r),0);
  const committedExcess=Math.max(0,locked-b);
  const candidates=rr.filter(r=>!budgetLocked(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
  candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
- if(!confirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Текущие неутверждённые суммы будут заменены; после распределения любые платежи можно менять вручную. Утверждённые и оплаченные суммы сохранятся.'))return;
+ if(!await appConfirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Текущие неутверждённые суммы будут заменены; после распределения любые платежи можно менять вручную. Утверждённые и оплаченные суммы сохранятся.'))return;
  let left=Math.max(0,b-locked);const next={...state.plans}, plans=new Map();
  for(const r of rr.filter(r=>!budgetLocked(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
  for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}
  for(const r of rr.filter(r=>plans.has(r.key))){const p=plans.get(r.key);checkTotal(r,p.items);next[planId(r.key)]=p;}
  const budgets=budgetStore();budgets[orgBudgetKey(org)]=b;if(state.budgetInput)delete state.budgetInput[orgBudgetKey(org)];
- state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast(committedExcess?'Предупреждение: ранее утверждено сверх плана на '+rub(committedExcess)+'. Новых сумм автоматически не добавлено; ручные платежи доступны.':'Автораспределение предложено. Доступно для ручной корректировки. Свободно по плану: '+rub(left));
+ state.plans=next;saveLocal('plans',next);saveLocal('org-budgets',budgets);draw();toast(committedExcess?'Предупреждение: ранее утверждено сверх плана на '+rub(committedExcess)+'. Новых сумм автоматически не добавлено; ручные платежи доступны.':'Распределено: '+rub(b-left)+' из '+rub(b)+'. Свободно: '+rub(left)+(left>0?' — не хватает доступных платежей по сроку. Проверьте причины исключения поставщиков.':' — можно корректировать вручную.'));
  }catch(e){toast('Ошибка: '+e.message,7500);}
 }
-if(typeof document!=='undefined')document.addEventListener('input',e=>{const org=e.target.dataset.budgetOrg;if(org){(state.budgetInput??={})[orgBudgetKey(org)]=e.target.value;}});
 if(typeof document!=='undefined')document.addEventListener('change',e=>{const k=e.target.dataset.budgetPriority;if(k){const p=priorityStore();p[k]=e.target.value;saveLocal('allocation-priorities',p);}});
 if(typeof document!=='undefined')document.addEventListener('click',e=>{
  const btn=e.target.closest('[data-auto-org]');
- if(btn){e.preventDefault();runOrgBudget(btn.dataset.autoOrg);}
+ if(btn){e.preventDefault();void runOrgBudget(btn.dataset.autoOrg);}
 });
