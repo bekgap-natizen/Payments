@@ -9,6 +9,7 @@ function renderOverview(model){if(!model)return header('Обзор платеж�
  ${kpi('Нераспределённый долг',rub(tot.unmatchedCents),'Требует проверки документов','!')}
  </div>
  <div class="alert amber"><span><b>Правило расчёта:</b> остаток долга из 1С распределяется по поступлениям <b>от новых к старым</b>. Срок = входящая дата + отсрочка. Это управленческая реконструкция, а не подтверждённый регистр зачётов 1С. Платежи, уже включённые в сальдо, повторно не вычитаются.</span></div>
+ ${renderCounterpartyWarnings(model,paymentSelection(model))}
  ${!active.length?`<div class="alert amber">Сначала включите действующих поставщиков в справочнике. Пока список пуст — никто автоматически не включается в платежи.</div>`:''}
  <div class="grid-2"><div class="card"><div class="card-head"><h2>Поставщики с наступившими сроками</h2><span class="sub">По выбранному списку</span></div>
  ${critical.length?`<div class="table-scroll"><table><thead><tr><th>Организация</th><th>Поставщик</th><th class="right">К оплате по сроку</th><th></th></tr></thead><tbody>${critical.map(r=>`<tr><td class="muted">${esc(r.org)}</td><td class="name">${esc(r.supplier)}</td><td class="right amount">${rub(r.dueCents)}</td><td><button class="btn btn-sm" data-open-vendor="${esc(r.key)}">Открыть</button></td></tr>`).join('')}</tbody></table></div>`:`<div class="empty"><p>Нет действующих поставщиков с наступившим сроком.</p></div>`}</div>
