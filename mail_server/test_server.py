@@ -114,6 +114,63 @@ class MailServerTests(unittest.TestCase):
         token=self.service.pair(self.service.pair_code)
         self.assertIn(token,self.service.session_tokens)
         with self.assertRaises(server.MailError):self.service.pair("000000")
+    def test_http_cors_for_local_html_and_sandboxed_appbox(self):
+        import http.client
+        import json
+        import threading
+        from http.server import ThreadingHTTPServer
+        self.service.set_account("test@volmax.invalid","test-only")
+        httpd=ThreadingHTTPServer(("127.0.0.1",0),server.make_handler(self.service))
+        old_port=server.PORT
+        server.PORT=httpd.server_port
+        thread=threading.Thread(target=httpd.serve_forever,daemon=True)
+        thread.start()
+        def request(method,path,origin=None,data=None,token=None,setup=None):
+            headers={}
+            if origin is not None:headers["Origin"]=origin
+            if data is not None:headers["Content-Type"]="application/json"
+            if token:headers["X-Payments-Token"]=token
+            if setup:headers["X-Setup-Token"]=setup
+            if method=="OPTIONS":
+                headers["Access-Control-Request-Method"]="POST"
+                headers["Access-Control-Request-Headers"]="content-type,x-payments-token"
+            conn=http.client.HTTPConnection("127.0.0.1",server.PORT,timeout=5)
+            try:
+                conn.request(method,path,body=json.dumps(data) if data is not None else None,headers=headers)
+                response=conn.getresponse()
+                return response.status,dict(response.getheaders()),response.read()
+            finally:conn.close()
+        try:
+            self.assertEqual(request("GET","/?utm_source=chatgpt.com")[0],200)
+            self.assertEqual(request("OPTIONS","/v1/status","null")[0],403)
+            self.assertEqual(request("OPTIONS","/v1/status",server.ALLOWED_ORIGIN)[0],204)
+            self.assertEqual(request("POST","/local/compatibility","null",{"enabled":True},setup=server.SETUP_TOKEN)[0],403)
+            local=f"http://127.0.0.1:{server.PORT}"
+            self.assertEqual(request("POST","/local/compatibility",local,{"enabled":True})[0],400)
+            self.assertEqual(request("POST","/local/compatibility",local,{"enabled":True},setup=server.SETUP_TOKEN)[0],200)
+            status,headers,_=request("OPTIONS","/v1/status","null")
+            self.assertEqual(status,204)
+            self.assertEqual(headers["Access-Control-Allow-Origin"],"null")
+            self.assertEqual(headers["Access-Control-Allow-Private-Network"],"true")
+            self.assertEqual(request("OPTIONS","/v1/status","https://untrusted.invalid")[0],403)
+            status,headers,body=request("GET","/v1/status","null")
+            self.assertEqual(status,200)
+            self.assertEqual(headers["Access-Control-Allow-Origin"],"null")
+            self.assertIsNone(json.loads(body)["sender"])
+            self.assertEqual(request("POST","/v1/send","null",payload())[0],401)
+            status,headers,body=request("POST","/v1/pair","null",{"code":self.service.pair_code})
+            self.assertEqual(status,200)
+            token=json.loads(body)["token"]
+            self.assertTrue(json.loads(request("GET","/v1/status","null",token=token)[2])["paired"])
+            self.assertFalse(json.loads(request("GET","/v1/status",server.ALLOWED_ORIGIN,token=token)[2])["paired"])
+            self.assertEqual(request("POST","/v1/send","https://untrusted.invalid",payload(),token=token)[0],403)
+            self.assertEqual(request("POST","/v1/send","null",payload(),token=token)[0],200)
+            self.assertEqual(len(FakeSMTP.messages),1)
+            self.assertEqual(request("POST","/local/compatibility",local,{"enabled":False},setup=server.SETUP_TOKEN)[0],200)
+            self.assertEqual(request("OPTIONS","/v1/status","null")[0],403)
+        finally:
+            httpd.shutdown();httpd.server_close();thread.join(timeout=5)
+            server.PORT=old_port
     def test_html_is_escaped(self):
         plain,html=server.render_mail("23.11.2026",[("Org",[("<script>alert(1)</script>",500)],500)],500)
         self.assertNotIn("<script>",html)
