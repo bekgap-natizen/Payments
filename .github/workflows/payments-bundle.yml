@@ -2,10 +2,11 @@ name: Payments AppBox and Windows Mail Server bundle
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, mail-simple-064]
     paths:
       - 'mail_server/**'
       - 'src/ui/**'
+      - 'tests/**'
       - '.github/workflows/payments-bundle.yml'
       - 'package.json'
 permissions:
