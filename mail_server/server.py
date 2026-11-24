@@ -551,9 +551,16 @@ const startup="""+json.dumps(startup)+""";
 document.getElementById('autostart').onclick=async()=>{try{await call('/local/autostart',{enabled:!startup});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('delete').onclick=async()=>{if(!confirm('Удалить почтовые настройки?'))return;try{await call('/local/delete',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};</script></html>"""
 
+class LocalMailHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address=False
+    def server_bind(self):
+        if os.name=="nt" and hasattr(socket,"SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
+        super().server_bind()
+
 def main():
     service=Service()
-    try: httpd=ThreadingHTTPServer((HOST,PORT),make_handler(service))
+    try: httpd=LocalMailHTTPServer((HOST,PORT),make_handler(service))
     except OSError as exc:
         if exc.errno in (98,48,10048) or getattr(exc,"winerror",None)==10048:
             # Repeated protocol activation must not launch a second listener.
