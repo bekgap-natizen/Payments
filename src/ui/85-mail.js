@@ -1,6 +1,7 @@
 // AppBox -> localhost mail companion; no SMTP password or mail credentials in frontend.
 const MAIL_LOCAL="http://127.0.0.1:8765";
 const MAIL_TOKEN_KEY="volmax-mail-pair-token";
+const MAIL_START_URL="volmax-payments://start";
 let mailBusy=false, mailToken="";
 function mailGetToken(){
  if(mailToken)return mailToken;
@@ -14,11 +15,11 @@ function mailSetToken(token){
  try{sessionStorage.setItem(MAIL_TOKEN_KEY,token);}catch(_){}
  return persistent;
 }
-async function mailFetch(route,body,token=""){
+async function mailFetch(route,body,token="",signal){
  const url=MAIL_LOCAL+route;
  const init={method:body===undefined?"GET":"POST",mode:"cors",cache:"no-store",
    headers:{"Content-Type":"application/json",...(token?{"X-Payments-Token":token}:{})},
-   ...(body===undefined?{}:{body:JSON.stringify(body)})};
+   ...(signal?{signal}:{}),...(body===undefined?{}:{body:JSON.stringify(body)})};
  // Retry construction only, never retry a POST automatically after an uncertain network result.
  let request;
  try{request=new Request(url,{...init,credentials:"omit",targetAddressSpace:"loopback"});}
@@ -28,12 +29,50 @@ async function mailFetch(route,body,token=""){
  if(!response.ok)throw Error(data.error||"Локальный сервер вернул ошибку");
  return data;
 }
+// A failed status GET is safe to retry; sending a POST is never retried automatically.
+async function mailProbe(token){
+ const controller=new AbortController();
+ const timeout=setTimeout(()=>controller.abort(),1200);
+ try{return await mailFetch("/v1/status",undefined,token,controller.signal);}
+ finally{clearTimeout(timeout);}
+}
+function mailLaunchProtocol(){
+ // No financial data or authentication material in the protocol URL.
+ // A temporary link avoids navigating the AppBox document itself.
+ const link=document.createElement("a");
+ link.href=MAIL_START_URL;link.style.display="none";
+ document.body.appendChild(link);try{link.click();}finally{link.remove();}
+}
+function mailProgress(label){
+ const button=$("send-payments-mail");if(button)button.textContent=label;
+}
+async function mailEnsureServer(token){
+ try{return await mailProbe(token);}
+ catch(error){
+   if(!(error instanceof TypeError)&&error.name!=="AbortError")throw error;
+ }
+ // If the initial network probe exhausted transient user activation, request a
+ // fresh click in our own dialog before invoking an external Windows protocol.
+ if(typeof navigator!=="undefined"&&navigator.userActivation&&!navigator.userActivation.isActive){
+   if(!await appDialog("Mail Server пока не отвечает. Запустить локальный модуль Windows? Если браузер спросит разрешение, выберите «Открыть».",{title:"Запуск Mail Server",ok:"Запустить"}))return null;
+ }
+ mailProgress("Запускаем Mail Server…");
+ mailLaunchProtocol();
+ const deadline=Date.now()+18000;
+ while(Date.now()<deadline){
+   await new Promise(resolve=>setTimeout(resolve,500));
+   try{return await mailProbe(token);}
+   catch(error){if(!(error instanceof TypeError)&&error.name!=="AbortError")throw error;}
+ }
+ throw Error("Mail Server не ответил. Проверьте, включён ли запуск по кнопке Payments в локальном окне сервера. Если AppBox блокирует внешний протокол или локальную сеть, используйте BAT или автозапуск Windows");
+}
 async function mailConnect(){
  try{
    const t=mailGetToken();
-   const status=await mailFetch("/v1/status",undefined,t);
+   const status=await mailEnsureServer(t);
+   if(!status)return null;
    if(status.version!==1)throw Error("Версия локального сервера несовместима с Payments");
-   if(!status.ready)throw Error("Откройте окно Mail Server и сохраните почту Яндекс");
+   if(!status.ready)throw Error("Откройте http://127.0.0.1:8765/ и сохраните почту Яндекс");
    if(status.paired)return {token:t,sender:status.sender};
    const code=await appPrompt("Первое подключение или привязка сброшена. Откройте http://127.0.0.1:8765/, при необходимости нажмите «Получить код подключения» и введите шесть цифр. Пароль почты сюда не вводится.");
    if(code===null)return null;
@@ -41,7 +80,8 @@ async function mailConnect(){
    const paired=await mailFetch("/v1/pair",{code});
    const remembered=mailSetToken(paired.token);
    if(!remembered)toast("Браузер не разрешает постоянное сохранение привязки. Код может понадобиться после закрытия приложения.",10000);
-   const verified=await mailFetch("/v1/status",undefined,paired.token);
+   const verified=await mailProbe(paired.token);
+   if(!verified.paired||!verified.sender)throw Error("Не удалось подтвердить привязку Mail Server");
    return {token:paired.token,sender:verified.sender};
  }catch(e){
    throw Error(e.message+"; проверьте запуск сервера, разрешение браузера на локальную сеть и настройки AppBox");
