@@ -309,9 +309,9 @@ def make_handler(service):
         def log_message(self,format,*args):
             # Never log POST bodies, credentials or auth headers.
             origin=self.headers.get("Origin","")
-            label=origin if origin in (ALLOWED_ORIGIN,"null",f"http://127.0.0.1:{PORT}","") else "другой источник"
+            label=origin if origin in (ALLOWED_ORIGIN,"null",f"http://127.0.0.1:{PORT}","") else "untrusted"
             status=args[1] if len(args)>1 and str(args[1]).isdigit() else "-"
-            print(f"[HTTP] {self.command} {urlsplit(self.path).path} -> {status}; Origin={label or '—'}",flush=True)
+            print(f"[HTTP] {self.command} {urlsplit(self.path).path} -> {status}; Origin={label or '-'}",flush=True)
         def _host_ok(self):
             return self.headers.get("Host","") in {f"127.0.0.1:{PORT}",f"localhost:{PORT}"}
         def _app_origin(self):
