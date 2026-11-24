@@ -60,5 +60,5 @@ test('Excel selection is sufficient to begin import; manual processing button re
  assert.match(logic,/if\(importBusy\)/);
  assert.match(logic,/input\.value=''/);
  assert.match(logic,/old&&old\.fingerprint===fp/);
- assert.match(logic,/old&&!confirm/);
+ assert.match(logic,/old&&!await appConfirm/);
 });
