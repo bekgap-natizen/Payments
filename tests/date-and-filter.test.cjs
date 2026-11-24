@@ -62,3 +62,18 @@ test('Excel selection is sufficient to begin import; manual processing button re
  assert.match(logic,/old&&old\.fingerprint===fp/);
  assert.match(logic,/old&&!await appConfirm/);
 });
+
+test('reconciliation status highlights entire vendor header without changing regular vendors',()=>{
+ const c=context();
+ c.paymentBlocked=r=>r.unmatchedCents>0||!!r.planNeedsReview||!!r.unallocatedCents||!!r.futureDatedCount;
+ const a=mk('REVIEW',{});a.unmatchedCents=50;a.flags=['Требуется сверка'];
+ const b=mk('NORMAL',{});b.unallocatedCents=0;
+ const warning=c.vendorCard(a),normal=c.vendorCard(b);
+ assert.match(warning,/class="detail vendor-card vendor-needs-review"/);
+ assert.match(warning,/class="badge badge-bad">Сверить</);
+ assert.doesNotMatch(normal,/vendor-needs-review|badge-bad">Сверить/);
+ c.state.openVendors.add(a.key);
+ assert.match(c.vendorCard(a),/vendor-needs-review[^>]* open>/);
+ const css=read('src/styles/layout-safety.css');
+ assert.match(css,/vendor-needs-review\[open\]>summary\{background:#ffe2e5\}/);
+});
