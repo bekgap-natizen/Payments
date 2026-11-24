@@ -29,8 +29,50 @@ function vendorCard(r){const p=r.plan||{},items=selectedItems(r),chosen=selected
  paid?'<span class="badge badge-good">Оплата отмечена в этом снимке</span>':`<button class="btn btn-primary" data-act="approve" data-key="${esc(r.key)}" ${canApprove?'':'disabled'}>✓ Утвердить выбранное</button>`}</div></div>
  </div></details>`;
 }
+// Visible counterparties with actual reconciliation/payment issues, independent of payment filters.
+function counterpartyWarnings(model,selection){
+ const rows=model.rows||model.active||[], byKey=new Map();
+ const blockedKeys=new Set((selection?.blocked||[]).map(r=>r.key));
+ for(const i of model.reconciliation?.issues||[]){
+  if(i.kind!=='supplier'||!i.supplier)continue;
+  const row=rows.find(r=>r.org===i.org&&r.supplier===i.supplier);
+  if(!row)continue;
+  const v=byKey.get(row.key)||{row,reasons:new Set(),difference:null};
+  v.reasons.add(i.reason);v.difference=i.difference;byKey.set(row.key,v);
+ }
+ for(const row of rows){
+  const flags=row.flags||[];
+  if(!flags.length&&!blockedKeys.has(row.key)&&!row.planNeedsReview&&!(row.unmatchedCents>0)&&!row.futureDatedCount&&!(row.unallocatedCents!==undefined&&row.unallocatedCents!==0))continue;
+  const v=byKey.get(row.key)||{row,reasons:new Set(),difference:null};
+  for(const flag of flags){
+   if(v.difference!==null&&/сальдо.*документ/i.test(flag))continue;
+   v.reasons.add(flag);
+  }
+  if(row.unmatchedCents>0&&!flags.some(f=>/не распределена/.test(f)))v.reasons.add('Часть долга не распределена по поступлениям');
+  if(row.planNeedsReview&&!flags.some(f=>/план/i.test(f)))v.reasons.add('План требует повторной проверки');
+  if(row.futureDatedCount&&!flags.some(f=>/позже даты/.test(f)))v.reasons.add('Поступления позже даты отчёта');
+  if(row.unallocatedCents!==undefined&&row.unallocatedCents!==0&&v.difference===null){v.difference=row.unallocatedCents;v.reasons.add('Не совпадает сальдо 1С и сумма документов');}
+  if(blockedKeys.has(row.key)&&!v.reasons.size)v.reasons.add('Выбранные суммы или документы не прошли контроль');
+  byKey.set(row.key,v);
+ }
+ const warnings=[...byKey.values()].map(v=>{
+  const r=v.row;
+  const blocked=r.tracked!==false&&(blockedKeys.has(r.key)||r.planNeedsReview||r.unmatchedCents>0||!!r.unallocatedCents||r.futureDatedCount>0);
+  return {...v,blocked};
+ }).sort((a,b)=>Number(b.blocked)-Number(a.blocked)||(b.row.unmatchedCents||0)-(a.row.unmatchedCents||0)||a.row.org.localeCompare(b.row.org,'ru')||a.row.supplier.localeCompare(b.row.supplier,'ru'));
+ return warnings;
+}
+function renderCounterpartyWarnings(model,selection){
+ const warnings=counterpartyWarnings(model,selection);
+ if(!warnings.length)return '';
+ return '<section class="card counterparty-warnings"><div class="card-head"><h2>Контрагенты — требуют проверки ('+warnings.length+')</h2></div><div class="card-body" style="padding:12px 16px"><p>Расхождения показаны по исходной ведомости и текущему расчёту. Проблемные суммы не включаются автоматически; контроль остальных платежей не меняется.</p></div><div class="table-scroll"><table><thead><tr><th>Организация / поставщик</th><th>Причина</th><th class="right">Общий долг 1С</th><th class="right">По сроку оплаты</th><th class="right">Нераспределённый долг</th><th class="right">Разница сальдо</th><th>Статус</th></tr></thead><tbody>'+
+ warnings.map(({row:r,reasons,difference,blocked})=>{
+  const status=r.tracked===false?'Не участвует в платежах':blocked?'Не включено в реестр':'Требует внимания';
+  return '<tr><td><div class="muted">'+esc(r.org)+'</div><div class="name">'+esc(r.supplier)+'</div></td><td>'+[...reasons].map(esc).join('<br>')+'</td><td class="right amount">'+rub(r.debtCents)+'</td><td class="right amount">'+(r.tracked===false?'—':rub(r.dueCents))+'</td><td class="right amount '+(r.unmatchedCents>0?'negative':'')+'">'+(r.tracked===false?'—':rub(r.unmatchedCents||0))+'</td><td class="right amount '+(difference?'negative':'')+'">'+(difference===null?'—':rub(difference))+'</td><td><span class="badge '+(blocked?'badge-bad':'badge-warn')+'">'+status+'</span></td></tr>';
+ }).join('')+'</tbody></table></div></section>';
+}
 function renderPayments(model){if(!model)return header('Платежи на дату','Отбор поступлений и утверждение отдельных сумм')+missing();
- const selection=paymentSelection(model);const review=model.active.filter(r=>r.dueCents>0&&paymentBlocked(r));
+ const selection=paymentSelection(model);
  const orgs=[...new Set(model.active.map(r=>r.org))].sort((a,b)=>a.localeCompare(b,'ru'));
  let rows=model.active.filter(r=>r.debtCents>0||r.plan.status);
  if(state.paymentOrg)rows=rows.filter(r=>r.org===state.paymentOrg);
@@ -41,7 +83,7 @@ function renderPayments(model){if(!model)return header('Платежи на да
  return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, `<button id="export-payments" class="btn btn-export-excel">Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn btn-primary">Подтвердить и отправить</button>`)+
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
- ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
+ ${renderCounterpartyWarnings(model,selection)}
  ${budgetPanel(model,orgs)}<div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только выбранные к оплате</label></div>
  ${!rows.length?`<div class="card"><div class="empty"><h2>${state.onlyDue?'Нет выбранных платежей':'Нет поставщиков для отображения'}</h2><p>${state.onlyDue?'Снимите фильтр, чтобы снова увидеть все документы.':'Укажите действующих контрагентов в справочнике или измените фильтры.'}</p>${state.onlyDue?'':'<button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button>'}</div></div>`:''}
  ${names.map(org=>`<section class="org-block"><div class="org-head"><h2>${esc(org)}</h2><span>Долг: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.debtCents,0))}</b></span><span>К оплате: <b>${rub(selection.eligible.filter(r=>r.org===org).reduce((n,r)=>n+selectedSum(r),0))}</b></span></div>${rows.filter(r=>r.org===org).map(vendorCard).join('')}</section>`).join('')}
