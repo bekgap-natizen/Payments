@@ -24,7 +24,7 @@ document.addEventListener('change',e=>{const el=e.target;
  if(el.dataset.docAmount)return updateDocument(el.dataset.key,el.dataset.docAmount,'value',el.value);
 });
 document.addEventListener('input',e=>{const el=e.target;
- if(el.hasAttribute('data-doc-amount')||el.hasAttribute('data-budget-org')){formatMoneyField(el);return;}
+ if(el.hasAttribute('data-doc-amount')||el.hasAttribute('data-budget-org')){formatMoneyField(el);if(el.hasAttribute('data-budget-org'))(state.budgetInput??={})[orgBudgetKey(el.dataset.budgetOrg)]=el.value;return;}
  if(el.id==='supplier-search'||el.id==='payment-search'){
  const field=el.id==='supplier-search'?'search':'paymentSearch';state[field]=el.value;
  // Debounce listing; never rebuild input on each keystroke before it loses caret.
