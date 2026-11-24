@@ -12,7 +12,7 @@ async function importReport(file,day){
  try{
  const fp=await fingerprint(file),old=state.snapshots.find(x=>x.date===day);
  if(old&&old.fingerprint===fp){state.date=day;saveLocal('selected-date',day);await refreshSnapshots();toast('Этот срез уже сохранён. Повторная загрузка не удваивает суммы.');navigate('payments');return;}
- if(old&&!confirm('За '+fmtDate(day)+' уже загружен другой файл. Заменить? Утверждённые суммы пометятся для повторной проверки.'))return;
+ if(old&&!await appConfirm('За '+fmtDate(day)+' уже загружен другой файл. Заменить? Утверждённые суммы пометятся для повторной проверки.'))return;
  if(progress)progress.textContent='Чтение и проверка ведомости…';
  const data=await C.parseXlsx(file);
  if(!data.organizations.length||data.errors.some(e=>/структура ведомости|уровни группировки/.test(e)))throw Error(data.errors.join('; '));
@@ -28,7 +28,7 @@ async function exportXlsx(){if(!state.snapshot)return;
  try{const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);
  const selection=paymentSelection(model);
  if(!selection.cents)throw Error('Нет выбранных платежей без расхождений');
- if(!confirm('Подтвердить реестр на '+rub(selection.cents)+' по '+selection.eligible.length+' поставщикам? Все организации, независимо от фильтра. Спорные суммы исключены. Деньги не переводятся.'))return;
+ if(!await appConfirm('Подтвердить реестр на '+rub(selection.cents)+' по '+selection.eligible.length+' поставщикам? Все организации, независимо от фильтра. Спорные суммы исключены. Деньги не переводятся.'))return;
  const next={...state.plans};for(const r of selection.eligible){next[planId(r.key)]={...r.plan,status:'approved',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()};}
  const finalModel=C.analyze(state.snapshot,state.date,state.settings,next);
  const approved=finalModel.active.filter(r=>selection.eligible.some(x=>x.key===r.key));
