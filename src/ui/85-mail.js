@@ -37,7 +37,7 @@ async function mailConnect(){
    if(status.version!==1)throw Error("Версия локального сервера несовместима с Payments");
    if(!status.ready)throw Error("Откройте окно Mail Server и сохраните почту Яндекс");
    if(status.paired)return {token:t,sender:status.sender};
-   const code=prompt("Введите шестизначный код из окна VOLMAX Mail Server. Почтовый пароль сюда вводить не нужно.");
+   const code=await appPrompt("Введите шестизначный код из окна VOLMAX Mail Server. Почтовый пароль сюда вводить не нужно.");
    if(code===null)return null;
    if(!/^\d{6}$/.test(code))throw Error("Код подключения должен состоять из шести цифр");
    const paired=await mailFetch("/v1/pair",{code});
@@ -87,11 +87,11 @@ async function sendPaymentMail(){
  try{
    const draft=mailDraft();
    const fmt=fmtDate(state.date);
-   if(!confirm("Подтвердить и отправить реестр на "+rub(draft.payload.totalCents)+
+   if(!await appConfirm("Подтвердить и отправить реестр на "+rub(draft.payload.totalCents)+
        " за "+fmt+" по "+draft.supplierCount+" поставщикам?\nПолучатели: генеральный директор, коммерческий директор, главный бухгалтер и бухгалтер."))return;
    const connected=await mailConnect();
    if(!connected)return;
-   if(!confirm("Отправитель: "+connected.sender+
+   if(!await appConfirm("Отправитель: "+connected.sender+
      "\nДата: "+fmt+"\nВсего: "+rub(draft.payload.totalCents)+
      "\nПисьмо с таблицей поставщиков и Excel-вложением будет отправлено через Яндекс. Продолжить?"))return;
    if(button)button.textContent="Отправляем…";
@@ -101,7 +101,7 @@ async function sendPaymentMail(){
      result=await mailFetch("/v1/send",payload,connected.token);
    }catch(err){
      if(/уже отправлялся|отправка была начата/i.test(err.message)){
-       if(!confirm("Этот реестр уже отправлялся или отправка была начата. Проверьте папку «Отправленные» Яндекса. Всё равно повторить отправку?"))return;
+       if(!await appConfirm("Этот реестр уже отправлялся или отправка была начата. Проверьте папку «Отправленные» Яндекса. Всё равно повторить отправку?"))return;
        result=await mailFetch("/v1/send",{...payload,force:true},connected.token);
      }else throw err;
    }
