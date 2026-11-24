@@ -61,6 +61,25 @@ class MailServerTests(unittest.TestCase):
     def tearDown(self):
         server.DB_FILE=self.previous
         self.dir.cleanup()
+    def test_yandex_rejected_password_shows_specific_error(self):
+        class RejectedSMTP(FakeSMTP):
+            def login(self, email, password):
+                import smtplib
+                raise smtplib.SMTPAuthenticationError(535, b"Invalid user or password")
+        self.service.smtp_factory=RejectedSMTP
+        with self.assertRaisesRegex(server.MailError, "SMTP 535") as result:
+            self.service.set_account("grishin@volmax.ru", "not-the-account-password")
+        self.assertIn("пароль приложения", str(result.exception))
+        self.assertNotIn("not-the-account-password",str(result.exception))
+        self.assertIsNone(self.store.load())
+    def test_yandex_network_issue_shows_specific_error(self):
+        class DisconnectedSMTP(FakeSMTP):
+            def __init__(self,*args,**kwargs):
+                raise ConnectionError("test failure")
+        self.service.smtp_factory=DisconnectedSMTP
+        with self.assertRaisesRegex(server.MailError, "подключиться к SMTP Яндекса"):
+            self.service.set_account("grishin@volmax.ru", "not-a-real-password")
+        self.assertIsNone(self.store.load())
     def test_account_and_persistence(self):
         self.service.set_account("employee@volmax.ru","app-password")
         self.assertEqual(self.service.configured_email(),"employee@volmax.ru")
