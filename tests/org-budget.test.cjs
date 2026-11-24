@@ -38,7 +38,7 @@ test('after auto allocation manual edits can raise or lower selected total regar
  ctx.currentRow=k=>C.analyze(snapshot,date,ctx.state.settings,ctx.state.plans).active.find(r=>r.key===k);
  ctx.toast=msg=>{ctx.message=msg};
  ctx.state.openVendors=new Set();
- vm.runInContext(actions.slice(actions.indexOf('function getPlan('),actions.indexOf('function action(')),ctx);
+ vm.runInContext(actions.slice(actions.indexOf('function getPlan('),actions.indexOf('async function action(')),ctx);
  const oldKey=k('Old'), oldDoc=ctx.currentRow(oldKey).allocatedDocuments[0];
  ctx.updateDocument(oldKey,oldDoc.id,'value','500'); // exceed 600 budget together with critical 400
  assert.equal(chosen('Old'),50000);assert.equal(chosen('Critical'),40000);
@@ -46,4 +46,26 @@ test('after auto allocation manual edits can raise or lower selected total regar
  assert.equal(chosen('Old'),10000);assert.equal(chosen('Critical'),40000);
  const status=ctx.state.plans[ctx.planId(oldKey)].status;
  assert.equal(status,'draft');
+});
+
+test('1 500 000 rubles distribute to eligible Yutara documents and preserve separators',async()=>{
+ const {ctx,input,storage}=setup();
+ const org='АквариусПРО ООО',supplier='Ютара',key=C.supplierKey(org,supplier);
+ ctx.state.snapshot={fingerprint:'F',organizations:[{name:org,suppliers:[sup(supplier,[receipt(11,'2026-10-01',100000000),receipt(12,'2026-10-02',70000000)])]}]};
+ ctx.state.settings={[key]:{tracked:true,delay:0}};
+ input.dataset.budgetOrg=org;input.value='1500000';
+ await ctx.runOrgBudget(org);
+ assert.equal(input.value,'1 500 000,00');
+ assert.equal(storage['org-budgets'][date+'¦'+org],150000000);
+ const plan=ctx.state.plans[ctx.planId(key)];
+ assert.equal(Object.values(plan.items).reduce((a,b)=>a+b,0),150000000);
+ assert.equal(ctx.paymentSelection(C.analyze(ctx.state.snapshot,date,ctx.state.settings,ctx.state.plans)).cents,150000000);
+});
+test('cancelled confirmation keeps the formatted budget and does not change payments',async()=>{
+ const {ctx,input}=setup();
+ input.value='1500000';ctx.appConfirm=async()=>false;
+ await ctx.runOrgBudget('A');
+ assert.equal(input.value,'1 500 000,00');
+ assert.equal(Object.keys(ctx.state.plans).length,0);
+ assert.equal(ctx.state.budgetInput[date+'¦A'],'1 500 000,00');
 });
