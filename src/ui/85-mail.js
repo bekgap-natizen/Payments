@@ -4,28 +4,26 @@ const MAIL_TOKEN_KEY="volmax-mail-pair-token";
 let mailBusy=false, mailToken="";
 function mailGetToken(){
  if(mailToken)return mailToken;
+ try{const saved=localStorage.getItem(MAIL_TOKEN_KEY);if(saved)return saved;}catch(_){}
  try{return sessionStorage.getItem(MAIL_TOKEN_KEY)||"";}catch(_){return "";}
 }
 function mailSetToken(token){
  mailToken=token;
+ let persistent=false;
+ try{localStorage.setItem(MAIL_TOKEN_KEY,token);persistent=localStorage.getItem(MAIL_TOKEN_KEY)===token;}catch(_){}
  try{sessionStorage.setItem(MAIL_TOKEN_KEY,token);}catch(_){}
+ return persistent;
 }
 async function mailFetch(route,body,token=""){
  const url=MAIL_LOCAL+route;
  const init={method:body===undefined?"GET":"POST",mode:"cors",cache:"no-store",
    headers:{"Content-Type":"application/json",...(token?{"X-Payments-Token":token}:{})},
    ...(body===undefined?{}:{body:JSON.stringify(body)})};
- let response;
- try{
-   // Chrome/Edge Local Network Access permission from HTTPS AppBox to localhost.
-   const request=new Request(url,{...init,targetAddressSpace:"loopback"});
-   response=await fetch(request);
- }catch(e){
-   // Older browsers do not understand targetAddressSpace.
-   if(e instanceof TypeError){
-     response=await fetch(url,init);
-   }else throw e;
- }
+ // Retry construction only, never retry a POST automatically after an uncertain network result.
+ let request;
+ try{request=new Request(url,{...init,credentials:"omit",targetAddressSpace:"loopback"});}
+ catch(e){if(!(e instanceof TypeError))throw e;request=new Request(url,{...init,credentials:"omit"});}
+ const response=await fetch(request);
  const data=await response.json().catch(()=>({error:"Некорректный ответ локального сервера"}));
  if(!response.ok)throw Error(data.error||"Локальный сервер вернул ошибку");
  return data;
@@ -37,11 +35,12 @@ async function mailConnect(){
    if(status.version!==1)throw Error("Версия локального сервера несовместима с Payments");
    if(!status.ready)throw Error("Откройте окно Mail Server и сохраните почту Яндекс");
    if(status.paired)return {token:t,sender:status.sender};
-   const code=await appPrompt("Введите шестизначный код из окна VOLMAX Mail Server. Почтовый пароль сюда вводить не нужно.");
+   const code=await appPrompt("Первое подключение или привязка сброшена. Откройте http://127.0.0.1:8765/, при необходимости нажмите «Получить код подключения» и введите шесть цифр. Пароль почты сюда не вводится.");
    if(code===null)return null;
    if(!/^\d{6}$/.test(code))throw Error("Код подключения должен состоять из шести цифр");
    const paired=await mailFetch("/v1/pair",{code});
-   mailSetToken(paired.token);
+   const remembered=mailSetToken(paired.token);
+   if(!remembered)toast("Браузер не разрешает постоянное сохранение привязки. Код может понадобиться после закрытия приложения.",10000);
    const verified=await mailFetch("/v1/status",undefined,paired.token);
    return {token:paired.token,sender:verified.sender};
  }catch(e){
@@ -87,13 +86,12 @@ async function sendPaymentMail(){
  try{
    const draft=mailDraft();
    const fmt=fmtDate(state.date);
-   if(!await appConfirm("Подтвердить и отправить реестр на "+rub(draft.payload.totalCents)+
-       " за "+fmt+" по "+draft.supplierCount+" поставщикам?\nПолучатели: генеральный директор, коммерческий директор, главный бухгалтер и бухгалтер."))return;
    const connected=await mailConnect();
    if(!connected)return;
-   if(!await appConfirm("Отправитель: "+connected.sender+
-     "\nДата: "+fmt+"\nВсего: "+rub(draft.payload.totalCents)+
-     "\nПисьмо с таблицей поставщиков и Excel-вложением будет отправлено через Яндекс. Продолжить?"))return;
+   if(!await appDialog("Отправитель: "+connected.sender+
+     "\nДата платежей: "+fmt+"\nПоставщиков: "+draft.supplierCount+"\nВсего: "+rub(draft.payload.totalCents)+
+     "\nПолучатели: генеральный директор, коммерческий директор, главный бухгалтер и бухгалтер (4)."+
+     "\nВ письме — таблица поставщиков; во вложении — Excel с документами.",{title:"Подтверждение отправки",ok:"Отправить"}))return;
    if(button)button.textContent="Отправляем…";
    const payload={...draft.payload,xlsxBase64:await blobBase64(draft.book)};
    let result;
