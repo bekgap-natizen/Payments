@@ -18,6 +18,8 @@ import smtplib
 import socket
 import sqlite3
 import ssl
+import sys
+import subprocess
 import threading
 import time
 import webbrowser
@@ -43,6 +45,8 @@ MAX_BODY = 9 * 1024 * 1024
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 API_VERSION = 1
+AUTOSTART_NAME = "VOLMAX Payments Mail Server"
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 class MailError(Exception):
     pass
@@ -95,10 +99,39 @@ def settings():
     try: return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError,ValueError): return {}
 
+def token_digest(token):
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
+
 def save_settings(data):
     tmp=SETTINGS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
     os.replace(tmp,SETTINGS_FILE)
+
+def autostart_command():
+    return subprocess.list2cmdline([sys.executable,str(Path(__file__).resolve()),"--background"])
+
+def autostart_enabled():
+    if os.name!="nt": return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,RUN_KEY) as key:
+            value,_=winreg.QueryValueEx(key,AUTOSTART_NAME)
+        return value==autostart_command()
+    except OSError: return False
+
+def set_autostart(enabled):
+    if os.name!="nt": raise MailError("Автозапуск доступен только в Windows")
+    import winreg
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER,RUN_KEY,0,winreg.KEY_SET_VALUE) as key:
+            if enabled:
+                command=autostart_command()
+                if len(command)>260: raise MailError("Слишком длинный путь. Распакуйте сервер в более короткую папку.")
+                winreg.SetValueEx(key,AUTOSTART_NAME,0,winreg.REG_SZ,command)
+            else:
+                try: winreg.DeleteValue(key,AUTOSTART_NAME)
+                except FileNotFoundError: pass
+    except OSError as exc: raise MailError("Не удалось изменить автозапуск Windows") from exc
 
 @contextmanager
 def db():
@@ -212,12 +245,17 @@ class Service:
     def __init__(self,store=None,smtp_factory=None):
         self.store=store if store is not None else CredentialStore()
         self.smtp_factory=smtp_factory or smtplib.SMTP_SSL
-        self.session_tokens={}
-        self.allow_opaque=False
-        self.pair_code=f"{secrets.randbelow(10**6):06d}"
-        self.pair_until=time.monotonic()+900
+        cfg=settings()
+        self.allow_opaque=cfg.get("allow_opaque") is True
+        saved=cfg.get("paired_tokens",{})
+        self.session_tokens={k:v for k,v in saved.items() if re.fullmatch(r"[a-f0-9]{64}",k) and v in (ALLOWED_ORIGIN,"null")} if isinstance(saved,dict) else {}
+        if not self.allow_opaque:
+            self.session_tokens={k:v for k,v in self.session_tokens.items() if v!="null"}
+        self.pair_code=""
+        self.pair_until=0
         self.pair_tries=0
-        self.lock=threading.Lock()
+        self.lock=threading.RLock()
+        if not self.session_tokens:self.new_pair_code()
         with db() as con: pass
     def credentials(self): return self.store.load()
     def configured_email(self):
@@ -251,30 +289,55 @@ class Service:
             raise MailError("Не удалось подключиться к SMTP Яндекса (" +
                             type(exc).__name__ +
                             "). Проверьте интернет, порт 465 и почтовые настройки.") from exc
-        self.store.save(email,password)
-        self.session_tokens.clear()
+        with self.lock:
+            self.store.save(email,password)
+            self.revoke_pairings()
+            self.new_pair_code()
+    def persist_pairings(self):
+        # Only SHA-256 digests are written; the actual bearer token is held by Payments.
+        cfg=settings()
+        cfg.update({"allow_opaque":self.allow_opaque,"paired_tokens":self.session_tokens})
+        save_settings(cfg)
+    def new_pair_code(self):
+        with self.lock:
+            self.pair_code=f"{secrets.randbelow(10**6):06d}"
+            self.pair_until=time.monotonic()+900
+            self.pair_tries=0
+    def revoke_pairings(self):
+        with self.lock:
+            self.session_tokens.clear()
+            self.pair_code=""
+            self.pair_until=0
+            self.persist_pairings()
     def enable_opaque(self,enabled):
-        # Explicit consent from the localhost setup page, only for this server run.
+        # Persist explicit local approval; opaque clients still need a valid paired token.
         with self.lock:
             self.allow_opaque=enabled is True
-            self.session_tokens.clear()
-            self.pair_code=f"{secrets.randbelow(10**6):06d}"
-            self.pair_until=time.monotonic()+900
-            self.pair_tries=0
+            if not self.allow_opaque:
+                self.session_tokens={k:v for k,v in self.session_tokens.items() if v!="null"}
+            self.persist_pairings()
+            self.new_pair_code()
     def pair(self,code,origin=ALLOWED_ORIGIN):
         with self.lock:
-            if self.pair_tries>=8: raise MailError("Слишком много попыток. Перезапустите локальный сервер")
-            self.pair_tries+=1
-            if time.monotonic()>self.pair_until or not isinstance(code,str) or not secrets.compare_digest(code,self.pair_code):
-                raise MailError("Неверный или устаревший код подключения")
-            token=secrets.token_urlsafe(32)
             if origin != ALLOWED_ORIGIN and not (origin == "null" and self.allow_opaque):
                 raise MailError("Подключение с этого источника запрещено")
-            self.session_tokens[token]=origin
+            if self.pair_tries>=8: raise MailError("Слишком много попыток. Обновите код в локальном окне сервера.")
+            self.pair_tries+=1
+            if not self.pair_code or time.monotonic()>self.pair_until or not isinstance(code,str) or not re.fullmatch(r"\d{6}",code) or not secrets.compare_digest(code,self.pair_code):
+                raise MailError("Неверный или устаревший код. Нажмите «Получить код подключения» в окне сервера.")
+            token=secrets.token_urlsafe(32)
+            self.session_tokens[token_digest(token)]=origin
+            self.persist_pairings()
+            self.pair_code=""
+            self.pair_until=0
             self.pair_tries=0
-            self.pair_code=f"{secrets.randbelow(10**6):06d}"
-            self.pair_until=time.monotonic()+900
             return token
+    def authorized(self,token,origin):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}",token or ""):return False
+        if origin!=ALLOWED_ORIGIN and not (origin=="null" and self.allow_opaque):return False
+        digest=token_digest(token)
+        with self.lock:
+            return self.session_tokens.get(digest)==origin
     def send(self,raw,force=False):
         credentials=self.credentials()
         if credentials is None: raise MailError("Сначала настройте почту в локальном сервере")
@@ -340,7 +403,7 @@ def make_handler(service):
         def _auth(self):
             supplied=self.headers.get("X-Payments-Token","")
             origin=self.headers.get("Origin","")
-            return bool(supplied) and any(bound==origin and secrets.compare_digest(supplied,t) for t,bound in tuple(service.session_tokens.items()))
+            return service.authorized(supplied,origin)
         def do_OPTIONS(self):
             if not self._host_ok(): return self._json(403,{"error":"Host denied"})
             if not self._app_origin() or self.path not in ("/v1/status","/v1/pair","/v1/send"):
@@ -390,9 +453,15 @@ def make_handler(service):
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
                     service.enable_opaque(data.get("enabled") is True)
                     return self._json(200,{"ok":True,"enabled":service.allow_opaque})
+                if self.path in ("/local/code","/local/revoke","/local/autostart"):
+                    if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
+                    if self.path=="/local/code": service.new_pair_code()
+                    elif self.path=="/local/revoke": service.revoke_pairings()
+                    else: set_autostart(data.get("enabled") is True)
+                    return self._json(200,{"ok":True})
                 if self.path=="/local/delete":
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
-                    service.store.delete();service.session_tokens.clear()
+                    service.store.delete();service.revoke_pairings()
                     return self._json(200,{"ok":True})
                 return self._json(404,{"error":"Not found"},external)
             except MailError as e: return self._json(400,{"error":str(e)},external)
@@ -404,15 +473,22 @@ def make_handler(service):
 SETUP_TOKEN=secrets.token_urlsafe(32)
 def admin_html(service):
     sender=service.configured_email() or "не настроен"
+    code=service.pair_code if time.monotonic()<service.pair_until else ""
+    startup=autostart_enabled()
     return """<!doctype html><html lang="ru"><meta charset="utf-8"><title>VOLMAX Mail Server</title>
 <style>body{font:15px Arial;background:#eef3f7;margin:0;padding:24px;color:#1e3449}main{max-width:480px;margin:auto;background:white;border-radius:16px;padding:28px;box-shadow:0 4px 22px #aaa5}label{display:block;margin:16px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;font-size:15px;border:1px solid #ccd6e1;border-radius:8px}button{margin-top:15px;background:#066fa9;color:white;cursor:pointer}small{color:#597084}#msg{margin-top:15px;white-space:pre-line}</style>
 <main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
-<p>Код подключения для AppBox: <strong>"""+service.pair_code+"""</strong></p>
-<small>Код действует 15 минут. После подключения потребуется новый код.</small>
+<p>Постоянных привязок Payments: <b>"""+str(len(service.session_tokens))+"""</b></p>
+<p>Код подключения для AppBox: <strong>"""+(code or "не требуется")+"""</strong></p>
+<small>Код нужен один раз для каждого браузера. Действует 15 минут. После перезапуска сохранённая привязка работает автоматически, если браузер разрешает хранение.</small>
+<button id="refresh-code" style="background:#526776">Получить код подключения</button>
+<button id="revoke" style="background:#526776">Сбросить все привязки Payments</button>
+<p>Автозапуск Windows: <b>"""+("включён" if startup else "выключен")+"""</b></p>
+<button id="autostart">"""+("Выключить автозапуск" if startup else "Включить автозапуск Windows")+"""</button>
+<small>Храните папку сервера в постоянном месте. При переносе включите автозапуск заново.</small>
 <p>Совместимость с AppBox / локальным HTML: <b>"""+("разрешена" if service.allow_opaque else "выключена")+"""</b></p>
 <button id="compat" style="background:#526776">"""+("Отключить режим совместимости" if service.allow_opaque else "Разрешить AppBox / локальный HTML")+"""</button>
-<p><small>Включайте только для доверенного Payments. Встроенные страницы и локальные файлы могут иметь Origin: null. Код подключения обязателен, пароль почты недоступен приложению. Разрешение действует до остановки сервера.</small></p>
-<button id="refresh-code" style="background:#526776">Обновить код подключения</button>
+<p><small>Включайте только для доверенного Payments. Встроенные страницы и локальные файлы могут иметь Origin: null. Код подключения обязателен, пароль почты недоступен приложению. Разрешение сохраняется на этом компьютере до отключения.</small></p>
 <p><small>Для входа через SMTP нужен отдельный <a href="https://id.yandex.ru/profile/apppasswords-list" target="_blank" rel="noopener noreferrer">пароль приложения Яндекса → Почта</a>, а не пароль от Яндекс ID. В Яндекс Почте также должен быть разрешён доступ почтовым клиентам.</small></p>
 <label>Корпоративная почта Яндекс</label><input id="email" type="email" autocomplete="username" placeholder="user@volmax.ru">
 <label>Пароль приложения Яндекс (не пароль от аккаунта)</label><input id="password" type="password" autocomplete="new-password">
@@ -421,16 +497,18 @@ def admin_html(service):
 <script>const token="""+json.dumps(SETUP_TOKEN)+""";async function call(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Setup-Token':token},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.error);return j}
 document.getElementById('save').onclick=async()=>{const out=document.getElementById('msg');out.textContent='Проверяем...';try{await call('/local/configure',{email:document.getElementById('email').value,password:document.getElementById('password').value});out.textContent='Подключение проверено. Данные сохранены. Обновите страницу.';document.getElementById('password').value=''}catch(e){out.textContent=e.message}};
 const compatible="""+json.dumps(service.allow_opaque)+""";
-document.getElementById('compat').onclick=async()=>{try{if(!compatible&&!confirm('Разрешить подключение доверенного Payments из AppBox или локального HTML до остановки сервера?'))return;await call('/local/compatibility',{enabled:!compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
-document.getElementById('refresh-code').onclick=async()=>{try{await call('/local/compatibility',{enabled:compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+document.getElementById('compat').onclick=async()=>{try{if(!compatible&&!confirm('Разрешить подключение доверенного Payments из AppBox или локального HTML на этом компьютере до отключения?'))return;await call('/local/compatibility',{enabled:!compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+document.getElementById('refresh-code').onclick=async()=>{try{await call('/local/code',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+document.getElementById('revoke').onclick=async()=>{if(!confirm('Сбросить все привязки? Потребуется повторное подключение Payments.'))return;try{await call('/local/revoke',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+const startup="""+json.dumps(startup)+""";
+document.getElementById('autostart').onclick=async()=>{try{await call('/local/autostart',{enabled:!startup});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('delete').onclick=async()=>{if(!confirm('Удалить почтовые настройки?'))return;try{await call('/local/delete',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};</script></html>"""
 
 def main():
     service=Service()
     httpd=ThreadingHTTPServer((HOST,PORT),make_handler(service))
     print(f"VOLMAX Mail Server: http://{HOST}:{PORT}/",flush=True)
-    print(f"Код подключения AppBox: {service.pair_code}",flush=True)
-    webbrowser.open(f"http://{HOST}:{PORT}/")
+    if "--background" not in sys.argv: webbrowser.open(f"http://{HOST}:{PORT}/")
     try: httpd.serve_forever()
     except KeyboardInterrupt: pass
     finally: httpd.server_close()
