@@ -81,4 +81,4 @@
 .app-dialog-field input{width:100%;margin-bottom:16px}.app-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}
 
 /* Only the compact reconciliation badge is red; the supplier row keeps its normal style. */
-#page-payments .vendor-summary>.badge.badge-review{background:#b82538;color:#fff}
+#page-payments .vendor-summary>.badge.badge-review{background:#fde8ec;color:#b82538}
