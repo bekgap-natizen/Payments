@@ -78,5 +78,5 @@ test('only the compact reconciliation badge is red; supplier card remains normal
  assert.match(c.vendorCard(a),/badge-review">Сверить/);
  const css=read('src/styles/layout-safety.css');
  assert.doesNotMatch(css,/vendor-needs-review/);
- assert.match(css,/\.vendor-summary>\.badge\.badge-review\{background:#b82538;color:#fff\}/);
+ assert.match(css,/\.vendor-summary>\.badge\.badge-review\{background:#fde8ec;color:#b82538\}/);
 });
