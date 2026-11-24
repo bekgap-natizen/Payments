@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import smtplib
+import socket
 import sqlite3
 import ssl
 import threading
@@ -226,8 +227,29 @@ class Service:
             raise MailError("Неверный адрес электронной почты")
         if not isinstance(password,str) or not 0<len(password)<=1024:
             raise MailError("Укажите пароль приложения Яндекса")
-        with self.smtp_factory(SMTP_HOST,465,context=ssl.create_default_context(),timeout=15) as smtp:
-            smtp.login(email,password)
+        try:
+            with self.smtp_factory(SMTP_HOST,465,context=ssl.create_default_context(),timeout=15) as smtp:
+                smtp.login(email,password)
+        except smtplib.SMTPAuthenticationError as exc:
+            # Never expose the supplied password or raw SMTP text in the interface.
+            raise MailError(
+                "Яндекс отклонил вход (SMTP " + str(exc.smtp_code) +
+                "). Создайте отдельный пароль приложения типа «Почта» для этого аккаунта "
+                "и проверьте разрешение почтовых клиентов в настройках Яндекса."
+            ) from exc
+        except smtplib.SMTPResponseException as exc:
+            raise MailError("Яндекс вернул ошибку SMTP " + str(exc.smtp_code) +
+                            ". Проверьте настройки почты и повторите попытку.") from exc
+        except ssl.SSLError as exc:
+            raise MailError("Ошибка защищённого соединения с Яндексом (SSL/TLS). "
+                            "Проверьте системную дату, сертификаты и антивирус.") from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise MailError("Истекло время ожидания Яндекс SMTP. "
+                            "Проверьте интернет, брандмауэр и доступ к smtp.yandex.ru:465.") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            raise MailError("Не удалось подключиться к SMTP Яндекса (" +
+                            type(exc).__name__ +
+                            "). Проверьте интернет, порт 465 и почтовые настройки.") from exc
         self.store.save(email,password)
         self.session_tokens.clear()
     def pair(self,code):
@@ -366,6 +388,7 @@ def admin_html(service):
 <main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
 <p>Код подключения для AppBox: <strong>"""+service.pair_code+"""</strong></p>
 <small>Код действует 15 минут. После подключения потребуется новый код.</small>
+<p><small>Для входа через SMTP нужен отдельный <a href="https://id.yandex.ru/profile/apppasswords-list" target="_blank" rel="noopener noreferrer">пароль приложения Яндекса → Почта</a>, а не пароль от Яндекс ID. В Яндекс Почте также должен быть разрешён доступ почтовым клиентам.</small></p>
 <label>Корпоративная почта Яндекс</label><input id="email" type="email" autocomplete="username" placeholder="user@volmax.ru">
 <label>Пароль приложения Яндекс (не пароль от аккаунта)</label><input id="password" type="password" autocomplete="new-password">
 <button id="save">Проверить Яндекс и сохранить</button><button id="delete" style="background:#526776">Удалить сохранённый аккаунт</button>
