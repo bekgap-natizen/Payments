@@ -63,17 +63,20 @@ test('Excel selection is sufficient to begin import; manual processing button re
  assert.match(logic,/old&&!await appConfirm/);
 });
 
-test('reconciliation status highlights entire vendor header without changing regular vendors',()=>{
+test('only the compact reconciliation badge is red; supplier card remains normal',()=>{
  const c=context();
  c.paymentBlocked=r=>r.unmatchedCents>0||!!r.planNeedsReview||!!r.unallocatedCents||!!r.futureDatedCount;
  const a=mk('REVIEW',{});a.unmatchedCents=50;a.flags=['Требуется сверка'];
  const b=mk('NORMAL',{});b.unallocatedCents=0;
  const warning=c.vendorCard(a),normal=c.vendorCard(b);
- assert.match(warning,/class="detail vendor-card vendor-needs-review"/);
- assert.match(warning,/class="badge badge-bad">Сверить</);
- assert.doesNotMatch(normal,/vendor-needs-review|badge-bad">Сверить/);
+ assert.match(warning,/class="detail vendor-card"/);
+ assert.match(warning,/class="badge badge-bad badge-review">Сверить</);
+ assert.doesNotMatch(warning,/vendor-needs-review/);
+ assert.doesNotMatch(normal,/badge-review|vendor-needs-review/);
  c.state.openVendors.add(a.key);
- assert.match(c.vendorCard(a),/vendor-needs-review[^>]* open>/);
+ assert.match(c.vendorCard(a),/class="detail vendor-card"[^>]* open>/);
+ assert.match(c.vendorCard(a),/badge-review">Сверить/);
  const css=read('src/styles/layout-safety.css');
- assert.match(css,/vendor-needs-review\[open\]>summary\{background:#ffe2e5\}/);
+ assert.doesNotMatch(css,/vendor-needs-review/);
+ assert.match(css,/\.vendor-summary>\.badge\.badge-review\{background:#b82538;color:#fff\}/);
 });
