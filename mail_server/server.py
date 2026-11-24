@@ -47,6 +47,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 API_VERSION = 1
 AUTOSTART_NAME = "VOLMAX Payments Mail Server"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+PROTOCOL_KEY = r"Software\Classes\volmax-payments"
 
 class MailError(Exception):
     pass
@@ -106,6 +107,44 @@ def save_settings(data):
     tmp=SETTINGS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding="utf-8")
     os.replace(tmp,SETTINGS_FILE)
+
+def protocol_command():
+    # Fixed executable, fixed script, fixed action. Never interpolate the URL (%1).
+    executable=Path(sys.executable)
+    gui=executable.with_name("pythonw.exe")
+    if gui.is_file(): executable=gui
+    return subprocess.list2cmdline([str(executable),str(Path(__file__).resolve()),"--background"])
+
+def protocol_enabled():
+    if os.name!="nt": return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,PROTOCOL_KEY+r"\shell\open\command") as key:
+            command,_=winreg.QueryValueEx(key,"")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,PROTOCOL_KEY) as key:
+            winreg.QueryValueEx(key,"URL Protocol")
+        return command==protocol_command()
+    except OSError: return False
+
+def register_protocol():
+    if os.name!="nt": raise MailError("Запуск по кнопке доступен только в Windows")
+    import winreg
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER,PROTOCOL_KEY,0,winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key,"",0,winreg.REG_SZ,"URL:VOLMAX Payments Mail Server")
+            winreg.SetValueEx(key,"URL Protocol",0,winreg.REG_SZ,"")
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER,PROTOCOL_KEY+r"\shell\open\command",0,winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key,"",0,winreg.REG_SZ,protocol_command())
+    except OSError as exc: raise MailError("Не удалось зарегистрировать запуск по кнопке Windows") from exc
+
+def unregister_protocol():
+    if os.name!="nt": raise MailError("Запуск по кнопке доступен только в Windows")
+    import winreg
+    try:
+        for suffix in (r"\shell\open\command",r"\shell\open",r"\shell",""):
+            try: winreg.DeleteKey(winreg.HKEY_CURRENT_USER,PROTOCOL_KEY+suffix)
+            except FileNotFoundError: pass
+    except OSError as exc: raise MailError("Не удалось удалить регистрацию запуска по кнопке") from exc
 
 def autostart_command():
     return subprocess.list2cmdline([sys.executable,str(Path(__file__).resolve()),"--background"])
@@ -453,11 +492,13 @@ def make_handler(service):
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
                     service.enable_opaque(data.get("enabled") is True)
                     return self._json(200,{"ok":True,"enabled":service.allow_opaque})
-                if self.path in ("/local/code","/local/revoke","/local/autostart"):
+                if self.path in ("/local/code","/local/revoke","/local/autostart","/local/protocol"):
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
                     if self.path=="/local/code": service.new_pair_code()
                     elif self.path=="/local/revoke": service.revoke_pairings()
-                    else: set_autostart(data.get("enabled") is True)
+                    elif self.path=="/local/autostart": set_autostart(data.get("enabled") is True)
+                    elif data.get("enabled") is True: register_protocol()
+                    else: unregister_protocol()
                     return self._json(200,{"ok":True})
                 if self.path=="/local/delete":
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
@@ -475,6 +516,7 @@ def admin_html(service):
     sender=service.configured_email() or "не настроен"
     code=service.pair_code if time.monotonic()<service.pair_until else ""
     startup=autostart_enabled()
+    protocol=protocol_enabled()
     return """<!doctype html><html lang="ru"><meta charset="utf-8"><title>VOLMAX Mail Server</title>
 <style>body{font:15px Arial;background:#eef3f7;margin:0;padding:24px;color:#1e3449}main{max-width:480px;margin:auto;background:white;border-radius:16px;padding:28px;box-shadow:0 4px 22px #aaa5}label{display:block;margin:16px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;font-size:15px;border:1px solid #ccd6e1;border-radius:8px}button{margin-top:15px;background:#066fa9;color:white;cursor:pointer}small{color:#597084}#msg{margin-top:15px;white-space:pre-line}</style>
 <main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
@@ -483,6 +525,9 @@ def admin_html(service):
 <small>Код нужен один раз для каждого браузера. Действует 15 минут. После перезапуска сохранённая привязка работает автоматически, если браузер разрешает хранение.</small>
 <button id="refresh-code" style="background:#526776">Получить код подключения</button>
 <button id="revoke" style="background:#526776">Сбросить все привязки Payments</button>
+<p>Запуск по кнопке Payments: <b>"""+("включён" if protocol else "выключен")+"""</b></p>
+<button id="protocol">"""+("Отключить запуск по кнопке" if protocol else "Включить запуск по кнопке Payments")+"""</button>
+<small>Однократная регистрация в Windows. При первом запуске браузер может запросить разрешение открыть приложение.</small>
 <p>Автозапуск Windows: <b>"""+("включён" if startup else "выключен")+"""</b></p>
 <button id="autostart">"""+("Выключить автозапуск" if startup else "Включить автозапуск Windows")+"""</button>
 <small>Храните папку сервера в постоянном месте. При переносе включите автозапуск заново.</small>
@@ -500,13 +545,21 @@ const compatible="""+json.dumps(service.allow_opaque)+""";
 document.getElementById('compat').onclick=async()=>{try{if(!compatible&&!confirm('Разрешить подключение доверенного Payments из AppBox или локального HTML на этом компьютере до отключения?'))return;await call('/local/compatibility',{enabled:!compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('refresh-code').onclick=async()=>{try{await call('/local/code',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('revoke').onclick=async()=>{if(!confirm('Сбросить все привязки? Потребуется повторное подключение Payments.'))return;try{await call('/local/revoke',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+const protocol="""+json.dumps(protocol)+""";
+document.getElementById('protocol').onclick=async()=>{try{await call('/local/protocol',{enabled:!protocol});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 const startup="""+json.dumps(startup)+""";
 document.getElementById('autostart').onclick=async()=>{try{await call('/local/autostart',{enabled:!startup});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('delete').onclick=async()=>{if(!confirm('Удалить почтовые настройки?'))return;try{await call('/local/delete',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};</script></html>"""
 
 def main():
     service=Service()
-    httpd=ThreadingHTTPServer((HOST,PORT),make_handler(service))
+    try: httpd=ThreadingHTTPServer((HOST,PORT),make_handler(service))
+    except OSError as exc:
+        if exc.errno in (98,48,10048) or getattr(exc,"winerror",None)==10048:
+            # Repeated protocol activation must not launch a second listener.
+            if "--background" not in sys.argv: webbrowser.open(f"http://{HOST}:{PORT}/")
+            return
+        raise
     print(f"VOLMAX Mail Server: http://{HOST}:{PORT}/",flush=True)
     if "--background" not in sys.argv: webbrowser.open(f"http://{HOST}:{PORT}/")
     try: httpd.serve_forever()
