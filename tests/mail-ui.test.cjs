@@ -35,3 +35,50 @@ test('mail draft includes each selected supplier, total, date and matching Excel
  assert.ok(draft.book.book);
  assert.equal(Object.values(draft.next).filter(x=>x.status==='approved').length,3);
 });
+
+test('saved browser pairing survives page reload and sessionStorage loss',()=>{
+ const disk=new Map();
+ const localStorage={getItem:k=>disk.get(k)||null,setItem:(k,v)=>disk.set(k,v)};
+ const first={localStorage,sessionStorage:{getItem:()=>null,setItem:()=>{}}};
+ vm.createContext(first);vm.runInContext(source,first);
+ assert.equal(first.mailSetToken('test-token'),true);
+ const restarted={localStorage,sessionStorage:{getItem:()=>null}};
+ vm.createContext(restarted);vm.runInContext(source,restarted);
+ assert.equal(restarted.mailGetToken(),'test-token');
+});
+test('blocked storage keeps temporary token without throwing',()=>{
+ const storage={getItem(){throw Error('denied')},setItem(){throw Error('denied')}};
+ const ctx={localStorage:storage,sessionStorage:storage};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ assert.equal(ctx.mailSetToken('temporary'),false);
+ assert.equal(ctx.mailGetToken(),'temporary');
+});
+test('already paired send uses exactly one confirmation, one POST, and approves only on acceptance',async()=>{
+ const state={date:'2026-11-24',plans:{}}, confirmations=[],requests=[];
+ const ctx={state,$:()=>null,fmtDate:String,rub:String,saveLocal:()=>{},draw:()=>{},toast:()=>{},
+ appDialog:async(message,options)=>{confirmations.push({message,options});return true;}};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailDraft=()=>({next:{approved:true},book:{},payload:{date:state.date,totalCents:150000000,organizations:[]},supplierCount:2});
+ ctx.mailConnect=async()=>({sender:'employee@example.invalid',token:'test-token'});
+ ctx.blobBase64=async()=>'test';
+ ctx.mailFetch=async(...args)=>{requests.push(args);return {ok:true,status:'accepted',sender:'employee@example.invalid'}};
+ await ctx.sendPaymentMail();
+ assert.equal(confirmations.length,1);
+ assert.equal(confirmations[0].options.ok,'Отправить');
+ assert.match(confirmations[0].message,/employee@example.invalid/);
+ assert.match(confirmations[0].message,/150000000/);
+ assert.equal(requests.length,1);
+ assert.equal(requests[0][0],'/v1/send');
+ assert.equal(state.plans.approved,true);
+ ctx.appDialog=async()=>false;
+ state.plans={};await ctx.sendPaymentMail();
+ assert.equal(requests.length,1);
+ assert.equal(state.plans.approved,undefined);
+});
+test('uncertain fetch failure never retries a send POST automatically',async()=>{
+ let calls=0;
+ const ctx={Request:class{constructor(url,init){this.url=url;this.init=init;}},fetch:async()=>{calls++;throw new TypeError('network failure');}};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ await assert.rejects(ctx.mailFetch('/v1/send',{totalCents:1},'token'),/network failure/);
+ assert.equal(calls,1);
+});
