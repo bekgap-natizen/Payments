@@ -16,15 +16,15 @@ test('manual Excel export has no budget intercept and budget panel warns about o
  assert.match(html,/Сверх плана/);assert.match(html,/ручная оплата разрешена/);
  assert.match(html,/50\.00/);
 });
-test('manual supplier approval remains permitted with plan lower than manually selected payment',()=>{
+test('manual supplier approval remains permitted with plan lower than manually selected payment',async()=>{
  const source=read('src/ui/70-actions.js');
  assert.doesNotMatch(source,/if\s*\(committed\+sum>limit\)/);
- const slice=source.slice(source.indexOf('function action('));
+ const slice=source.slice(source.indexOf('async function action('));
  const row={key:'R',org:'Org',supplier:'Vendor',plan:{status:'draft',items:{doc:15000}},planNeedsReview:false,unmatchedCents:0,unallocatedCents:0};
  const state={date:'2026-11-23',snapshot:{fingerprint:'fp'},plans:{'2026-11-23¦R':{status:'draft',items:{doc:15000}}}};
  let approved=false;
  const context={state,planId:k=>'2026-11-23¦'+k,currentRow:()=>row,checkTotal:()=>15000,paymentBlocked:()=>false,
-  confirm:()=>true,saveLocal:()=>{},draw:()=>{},toast:()=>{},rub:String,Date,console};
- vm.createContext(context);vm.runInContext(slice,context);context.action('R','approve');
+  appConfirm:async()=>true,saveLocal:()=>{},draw:()=>{},toast:()=>{},rub:String,Date,console};
+ vm.createContext(context);vm.runInContext(slice,context);await context.action('R','approve');
  assert.equal(state.plans['2026-11-23¦R'].status,'approved');
 });
