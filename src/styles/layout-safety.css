@@ -80,16 +80,5 @@
 .app-dialog h2{font-size:20px;margin:0 0 12px}.app-dialog-message{white-space:pre-wrap;line-height:1.55;margin:0 0 18px}
 .app-dialog-field input{width:100%;margin-bottom:16px}.app-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}
 
-/* Reconciliation warning: highlight only the full supplier header, not its documents. */
-#page-payments .detail.vendor-needs-review,
-#page-payments .detail.vendor-needs-review:hover,
-#page-payments .detail.vendor-needs-review[open]{border-color:#db5963}
-#page-payments .detail.vendor-needs-review>summary,
-#page-payments .detail.vendor-needs-review>summary:hover,
-#page-payments .detail.vendor-needs-review[open]>summary{background:#ffe2e5}
-#page-payments .detail.vendor-needs-review>summary::before,
-#page-payments .detail.vendor-needs-review .vendor-title,
-#page-payments .detail.vendor-needs-review .vendor-metrics,
-#page-payments .detail.vendor-needs-review .vendor-metrics b,
-#page-payments .detail.vendor-needs-review .vendor-metrics>span{color:#8b2331}
-#page-payments .detail.vendor-needs-review .vendor-summary>.badge.badge-bad{background:#b82538;color:#fff}
+/* Only the compact reconciliation badge is red; the supplier row keeps its normal style. */
+#page-payments .vendor-summary>.badge.badge-review{background:#b82538;color:#fff}
