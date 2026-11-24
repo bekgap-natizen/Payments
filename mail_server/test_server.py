@@ -54,12 +54,15 @@ class MailServerTests(unittest.TestCase):
     def setUp(self):
         self.dir=tempfile.TemporaryDirectory()
         self.previous=server.DB_FILE
+        self.previous_settings=server.SETTINGS_FILE
+        server.SETTINGS_FILE=Path(self.dir.name)/"settings.json"
         server.DB_FILE=Path(self.dir.name)/"test.sqlite3"
         self.store=FakeStore()
         FakeSMTP.messages=[];FakeSMTP.logins=[];FakeSMTP.fail=False
         self.service=server.Service(self.store,FakeSMTP)
     def tearDown(self):
         server.DB_FILE=self.previous
+        server.SETTINGS_FILE=self.previous_settings
         self.dir.cleanup()
     def test_yandex_rejected_password_shows_specific_error(self):
         class RejectedSMTP(FakeSMTP):
@@ -112,8 +115,42 @@ class MailServerTests(unittest.TestCase):
     def test_pairing_code_and_token(self):
         self.service.set_account("x@volmax.ru","secret")
         token=self.service.pair(self.service.pair_code)
-        self.assertIn(token,self.service.session_tokens)
+        self.assertTrue(self.service.authorized(token,server.ALLOWED_ORIGIN))
         with self.assertRaises(server.MailError):self.service.pair("000000")
+    def test_saved_pairing_survives_restart_and_can_be_revoked(self):
+        self.service.set_account("employee@example.invalid","test-password")
+        self.service.enable_opaque(True)
+        code=self.service.pair_code
+        token=self.service.pair(code,"null")
+        self.assertFalse(self.service.pair_code)
+        self.assertNotIn(token,server.SETTINGS_FILE.read_text(encoding="utf-8"))
+        restarted=server.Service(self.store,FakeSMTP)
+        self.assertTrue(restarted.allow_opaque)
+        self.assertTrue(restarted.authorized(token,"null"))
+        self.assertFalse(restarted.authorized(token,server.ALLOWED_ORIGIN))
+        self.assertFalse(restarted.authorized(token,"https://untrusted.invalid"))
+        self.assertFalse(restarted.pair_code)
+        restarted.new_pair_code()
+        self.assertTrue(restarted.authorized(token,"null"))
+        restarted.revoke_pairings()
+        self.assertFalse(server.Service(self.store,FakeSMTP).authorized(token,"null"))
+    def test_disabling_compatibility_revokes_opaque_pairing(self):
+        self.service.set_account("employee@example.invalid","test-password")
+        self.service.enable_opaque(True)
+        token=self.service.pair(self.service.pair_code,"null")
+        self.service.enable_opaque(False)
+        restarted=server.Service(self.store,FakeSMTP)
+        self.assertFalse(restarted.allow_opaque)
+        self.assertFalse(restarted.authorized(token,"null"))
+    def test_account_change_revokes_old_pairing(self):
+        self.service.set_account("employee@example.invalid","test-password")
+        token=self.service.pair(self.service.pair_code)
+        self.service.set_account("second@example.invalid","new-password")
+        self.assertFalse(server.Service(self.store,FakeSMTP).authorized(token,server.ALLOWED_ORIGIN))
+    def test_autostart_command_uses_current_executable_and_script(self):
+        command=server.autostart_command()
+        self.assertIn("--background",command)
+        self.assertIn("server.py",command)
     def test_http_cors_for_local_html_and_sandboxed_appbox(self):
         import http.client
         import json
