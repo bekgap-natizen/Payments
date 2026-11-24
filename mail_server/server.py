@@ -212,7 +212,8 @@ class Service:
     def __init__(self,store=None,smtp_factory=None):
         self.store=store if store is not None else CredentialStore()
         self.smtp_factory=smtp_factory or smtplib.SMTP_SSL
-        self.session_tokens=set()
+        self.session_tokens={}
+        self.allow_opaque=False
         self.pair_code=f"{secrets.randbelow(10**6):06d}"
         self.pair_until=time.monotonic()+900
         self.pair_tries=0
@@ -252,14 +253,24 @@ class Service:
                             "). Проверьте интернет, порт 465 и почтовые настройки.") from exc
         self.store.save(email,password)
         self.session_tokens.clear()
-    def pair(self,code):
+    def enable_opaque(self,enabled):
+        # Explicit consent from the localhost setup page, only for this server run.
+        with self.lock:
+            self.allow_opaque=enabled is True
+            self.session_tokens.clear()
+            self.pair_code=f"{secrets.randbelow(10**6):06d}"
+            self.pair_until=time.monotonic()+900
+            self.pair_tries=0
+    def pair(self,code,origin=ALLOWED_ORIGIN):
         with self.lock:
             if self.pair_tries>=8: raise MailError("Слишком много попыток. Перезапустите локальный сервер")
             self.pair_tries+=1
             if time.monotonic()>self.pair_until or not isinstance(code,str) or not secrets.compare_digest(code,self.pair_code):
                 raise MailError("Неверный или устаревший код подключения")
             token=secrets.token_urlsafe(32)
-            self.session_tokens.add(token)
+            if origin != ALLOWED_ORIGIN and not (origin == "null" and self.allow_opaque):
+                raise MailError("Подключение с этого источника запрещено")
+            self.session_tokens[token]=origin
             self.pair_tries=0
             self.pair_code=f"{secrets.randbelow(10**6):06d}"
             self.pair_until=time.monotonic()+900
@@ -297,10 +308,15 @@ def make_handler(service):
         server_version="VOLMAX-Mail/1.0"
         def log_message(self,format,*args):
             # Never log POST bodies, credentials or auth headers.
-            print(f"[HTTP] {self.command} {urlsplit(self.path).path}",flush=True)
+            origin=self.headers.get("Origin","")
+            label=origin if origin in (ALLOWED_ORIGIN,"null",f"http://127.0.0.1:{PORT}","") else "другой источник"
+            status=args[1] if len(args)>1 and str(args[1]).isdigit() else "-"
+            print(f"[HTTP] {self.command} {urlsplit(self.path).path} -> {status}; Origin={label or '—'}",flush=True)
         def _host_ok(self):
             return self.headers.get("Host","") in {f"127.0.0.1:{PORT}",f"localhost:{PORT}"}
-        def _app_origin(self): return self.headers.get("Origin","")==ALLOWED_ORIGIN
+        def _app_origin(self):
+            origin=self.headers.get("Origin","")
+            return origin==ALLOWED_ORIGIN or (origin=="null" and service.allow_opaque)
         def _admin_origin(self): return self.headers.get("Origin","")==f"http://127.0.0.1:{PORT}"
         def _json(self,status,data,external=False):
             body=json.dumps(data,ensure_ascii=False).encode()
@@ -309,8 +325,8 @@ def make_handler(service):
             self.send_header("Content-Length",str(len(body)))
             self.send_header("Cache-Control","no-store")
             self.send_header("X-Content-Type-Options","nosniff")
-            if external:
-                self.send_header("Access-Control-Allow-Origin",ALLOWED_ORIGIN)
+            if external and self._app_origin():
+                self.send_header("Access-Control-Allow-Origin",self.headers["Origin"])
                 self.send_header("Vary","Origin")
                 self.send_header("Access-Control-Allow-Private-Network","true")
             self.end_headers();self.wfile.write(body)
@@ -323,12 +339,13 @@ def make_handler(service):
             return json.loads(self.rfile.read(size))
         def _auth(self):
             supplied=self.headers.get("X-Payments-Token","")
-            return bool(supplied) and any(secrets.compare_digest(supplied,t) for t in service.session_tokens)
+            origin=self.headers.get("Origin","")
+            return bool(supplied) and any(bound==origin and secrets.compare_digest(supplied,t) for t,bound in tuple(service.session_tokens.items()))
         def do_OPTIONS(self):
             if not self._host_ok(): return self._json(403,{"error":"Host denied"})
             if not self._app_origin() or self.path not in ("/v1/status","/v1/pair","/v1/send"):
                 return self._json(403,{"error":"Origin denied"})
-            self.send_response(204);self.send_header("Access-Control-Allow-Origin",ALLOWED_ORIGIN)
+            self.send_response(204);self.send_header("Access-Control-Allow-Origin",self.headers["Origin"])
             self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers","Content-Type, X-Payments-Token")
             self.send_header("Access-Control-Allow-Private-Network","true")
@@ -341,7 +358,7 @@ def make_handler(service):
                 authorized=self._auth()
                 return self._json(200,{"version":API_VERSION,"ready":bool(service.credentials()),
                     "paired":authorized,"sender":service.configured_email() if authorized else None},True)
-            if self.path not in ("/","/local"): return self._json(404,{"error":"Not found"})
+            if urlsplit(self.path).path not in ("/","/local"): return self._json(404,{"error":"Not found"})
             page=admin_html(service)
             data=page.encode()
             self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8")
@@ -360,7 +377,7 @@ def make_handler(service):
                 data=self._read()
                 if self.path=="/v1/pair":
                     if not service.credentials(): raise MailError("Сначала настройте почту в окне локального сервера")
-                    return self._json(200,{"token":service.pair(data.get("code")),"apiVersion":API_VERSION},True)
+                    return self._json(200,{"token":service.pair(data.get("code"),self.headers["Origin"]),"apiVersion":API_VERSION},True)
                 if self.path=="/v1/send":
                     if not self._auth():return self._json(401,{"error":"Подключите локальный сервер заново"},True)
                     return self._json(200,service.send(data,force=data.get("force") is True),True)
@@ -369,6 +386,10 @@ def make_handler(service):
                         raise MailError("Недействительный запрос настройки")
                     service.set_account(data.get("email"),data.get("password"))
                     return self._json(200,{"ok":True,"sender":service.configured_email()})
+                if self.path=="/local/compatibility":
+                    if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
+                    service.enable_opaque(data.get("enabled") is True)
+                    return self._json(200,{"ok":True,"enabled":service.allow_opaque})
                 if self.path=="/local/delete":
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
                     service.store.delete();service.session_tokens.clear()
@@ -388,6 +409,10 @@ def admin_html(service):
 <main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
 <p>Код подключения для AppBox: <strong>"""+service.pair_code+"""</strong></p>
 <small>Код действует 15 минут. После подключения потребуется новый код.</small>
+<p>Совместимость с AppBox / локальным HTML: <b>"""+("разрешена" if service.allow_opaque else "выключена")+"""</b></p>
+<button id="compat" style="background:#526776">"""+("Отключить режим совместимости" if service.allow_opaque else "Разрешить AppBox / локальный HTML")+"""</button>
+<p><small>Включайте только для доверенного Payments. Встроенные страницы и локальные файлы могут иметь Origin: null. Код подключения обязателен, пароль почты недоступен приложению. Разрешение действует до остановки сервера.</small></p>
+<button id="refresh-code" style="background:#526776">Обновить код подключения</button>
 <p><small>Для входа через SMTP нужен отдельный <a href="https://id.yandex.ru/profile/apppasswords-list" target="_blank" rel="noopener noreferrer">пароль приложения Яндекса → Почта</a>, а не пароль от Яндекс ID. В Яндекс Почте также должен быть разрешён доступ почтовым клиентам.</small></p>
 <label>Корпоративная почта Яндекс</label><input id="email" type="email" autocomplete="username" placeholder="user@volmax.ru">
 <label>Пароль приложения Яндекс (не пароль от аккаунта)</label><input id="password" type="password" autocomplete="new-password">
@@ -395,6 +420,9 @@ def admin_html(service):
 <div id="msg" role="status"></div><p><small>Пароль хранится в Диспетчере учётных данных Windows и не отправляется в AppBox. SMTP: smtp.yandex.ru:465.</small></p></main>
 <script>const token="""+json.dumps(SETUP_TOKEN)+""";async function call(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Setup-Token':token},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.error);return j}
 document.getElementById('save').onclick=async()=>{const out=document.getElementById('msg');out.textContent='Проверяем...';try{await call('/local/configure',{email:document.getElementById('email').value,password:document.getElementById('password').value});out.textContent='Подключение проверено. Данные сохранены. Обновите страницу.';document.getElementById('password').value=''}catch(e){out.textContent=e.message}};
+const compatible="""+json.dumps(service.allow_opaque)+""";
+document.getElementById('compat').onclick=async()=>{try{if(!compatible&&!confirm('Разрешить подключение доверенного Payments из AppBox или локального HTML до остановки сервера?'))return;await call('/local/compatibility',{enabled:!compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
+document.getElementById('refresh-code').onclick=async()=>{try{await call('/local/compatibility',{enabled:compatible});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};
 document.getElementById('delete').onclick=async()=>{if(!confirm('Удалить почтовые настройки?'))return;try{await call('/local/delete',{});location.reload()}catch(e){document.getElementById('msg').textContent=e.message}};</script></html>"""
 
 def main():
