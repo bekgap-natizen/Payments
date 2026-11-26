@@ -2,8 +2,7 @@
 document.addEventListener('click',async e=>{
  const vendorCheck=e.target.closest('[data-supplier-select]');
  if(vendorCheck){e.preventDefault();e.stopPropagation();const k=vendorCheck.dataset.supplierSelect;const row=currentRow(k);
- if(row){const due=row.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0);const all=due.length>0&&due.every(d=>Number(row.plan?.items?.[d.id]||0)>0);
- action(k,selectedSum(row)>0?'clear':'select-due');}return;}
+ if(row&&!vendorCheck.disabled)await action(k,'toggle-supplier');return;}
  const nav=e.target.closest('[data-page]');if(nav){navigate(nav.dataset.page);return;}
  const open=e.target.closest('[data-open-vendor]');if(open){const k=open.dataset.openVendor;state.openVendors.add(k);navigate('payments');return;}
  const load=e.target.closest('[data-load]');if(load){state.date=load.dataset.load;saveLocal('selected-date',state.date);await refreshSnapshots();navigate('payments');return;}
