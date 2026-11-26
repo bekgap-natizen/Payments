@@ -1,0 +1,39 @@
+name: Mobile approval pilot tests and package
+on:
+  push:
+    branches: [mobile-approval-070]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm test
+      - run: pip install -r approval_server/requirements.txt
+      - run: python -m unittest discover -s approval_server -p 'test_*.py' -v
+      - run: node --check approval_server/static/app.js && node --check approval_server/static/sw.js
+      - run: python -m approval_server.make_icons assets/volmax-mark.png
+      - name: Build separate pilot package (source and deployment instructions)
+        run: |
+          mkdir -p release
+          zip -q -r release/VOLMAX-Payments-Mobile-Pilot.zip approval_server assets src scripts mail_server package.json index.html .dockerignore -x '*/__pycache__/*' '*/data/*' '*/.env' '*.sqlite*'
+          unzip -tqq release/VOLMAX-Payments-Mobile-Pilot.zip
+          sha256sum release/VOLMAX-Payments-Mobile-Pilot.zip > release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-pilot
+          path: release/
+      - name: Publish isolated prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.7.0-mobile-pilot.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" release/VOLMAX-Payments-Mobile-Pilot.zip release/SHA256SUMS.txt --target "$GITHUB_SHA" --title "VOLMAX Payments 0.7.0 — мобильное согласование (пилот)" --notes "Отдельный пакет серверного пилота с ролями, версиями реестров, мобильным PWA, очередью push и отправкой через локальную почту. Требуется развёртывание на отдельном HTTPS origin, настройка учётных записей и проверка реальных устройств. Не заменяет 0.6.11." --prerelease
