@@ -69,3 +69,62 @@ test('cancelled confirmation keeps the formatted budget and does not change paym
  assert.equal(Object.keys(ctx.state.plans).length,0);
  assert.equal(ctx.state.budgetInput[date+'¦A'],'1 500 000,00');
 });
+
+function enableActions(ctx){
+ ctx.state.openVendors=new Set();
+ const source=fs.readFileSync('src/ui/70-actions.js','utf8');
+ vm.runInContext(source,ctx);
+}
+test('manual supplier checkbox allocates one million to not-yet-due invoices, without touching other organizations',async()=>{
+ const {ctx,input,chosen}=setup();
+ const org='Org A',supplier='Supplier A',key=k(supplier,org);
+ ctx.state.snapshot={fingerprint:'F',organizations:[
+ {name:org,suppliers:[sup(supplier,[receipt(11,'2026-11-01',70000000),receipt(12,'2026-11-02',60000000)])]},
+ {name:'B',suppliers:[sup('Other',[receipt(13,'2026-11-01',10000)])]}]};
+ ctx.state.settings={[key]:{tracked:true,delay:60},[k('Other','B')]:{tracked:true,delay:0}};
+ const other=ctx.planId(k('Other','B'));ctx.state.plans[other]={items:{x:900},status:'draft'};
+ input.dataset.budgetOrg=org;input.value='1000000';
+ await ctx.runOrgBudget(org);
+ assert.equal(chosen(supplier,org),0);
+ enableActions(ctx);
+ const r=ctx.currentRow(key);
+ assert.equal(r.dueCents,0);assert.equal(ctx.supplierCheckboxState(r).disabled,false);
+ await ctx.action(key,'toggle-supplier');
+ assert.equal(chosen(supplier,org),100000000);
+ const p=ctx.state.plans[ctx.planId(key)];
+ assert.equal(p.items[r.allocatedDocuments[1].id],70000000);
+ assert.equal(p.items[r.allocatedDocuments[0].id],30000000);
+ assert.equal(p.manual,true);
+ assert.equal(chosen('Other','B'),900);
+ assert.equal(ctx.supplierCheckboxState(ctx.currentRow(key)).partial,true);
+ assert.equal(ctx.paymentSelection(C.analyze(ctx.state.snapshot,date,ctx.state.settings,ctx.state.plans)).eligible.find(x=>x.key===key).supplier,supplier);
+});
+test('supplier checkbox only uses leftover budget; manual edits and cancellation survive redistribution',async()=>{
+ const {ctx,input,chosen}=setup();
+ // Future due date must be derived from an existing receipt, not a future-dated receipt.
+ const org='A',future=k('Future');
+ const suppliers=ctx.state.snapshot.organizations[0].suppliers.map(s=>s.name==='Future'?sup('Future',[receipt(4,'2026-11-19',60000)]):s);
+ ctx.state.snapshot={...ctx.state.snapshot,organizations:[{name:org,suppliers},ctx.state.snapshot.organizations[1]]};
+ ctx.state.settings[future].delay=60;
+ input.value='1500';await ctx.runOrgBudget(org);
+ assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),50000);assert.equal(chosen('Today'),20000);
+ enableActions(ctx);
+ await ctx.action(future,'toggle-supplier');
+ assert.equal(chosen('Future'),40000);assert.equal(chosen('Critical'),40000);assert.equal(chosen('Old'),50000);
+ const d=ctx.currentRow(future).allocatedDocuments[0];
+ ctx.updateDocument(future,d.id,'value','250');assert.equal(chosen('Future'),25000);
+ await ctx.runOrgBudget(org);assert.equal(chosen('Future'),25000);assert.equal(chosen('Old'),50000);
+ ctx.appConfirm=async()=>false;await ctx.action(future,'toggle-supplier');assert.equal(chosen('Future'),25000);
+ ctx.appConfirm=async()=>true;await ctx.action(future,'toggle-supplier');assert.equal(chosen('Future'),0);
+ await ctx.runOrgBudget(org);assert.equal(chosen('Future'),0);
+ assert.equal(chosen('Critical'),40000);
+});
+test('checkbox does not exceed supplier debt or budget and keeps manual amount override available',async()=>{
+ const {ctx,input,chosen}=setup();
+ const key=k('Critical');input.value='0';await ctx.runOrgBudget('A');
+ enableActions(ctx);
+ await ctx.action(key,'toggle-supplier');assert.equal(chosen('Critical'),0);
+ const d=ctx.currentRow(key).allocatedDocuments[0];
+ ctx.updateDocument(key,d.id,'value','200');assert.equal(chosen('Critical'),20000);
+ input.value='5000';await ctx.runOrgBudget('A');assert.equal(chosen('Critical'),20000);
+});
