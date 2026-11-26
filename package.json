@@ -1,6 +1,6 @@
 {
   "name": "volmax-payments",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "private": true,
   "description": "Локальный прототип учета и согласования платежей ВОЛМАКС",
   "scripts": {
