@@ -42,7 +42,7 @@ def normalize(raw):
     if not isinstance(raw,dict): fail("Неверный реестр")
     date=day(raw.get("date")); rows=raw.get("rows")
     if not isinstance(rows,list) or not 0<len(rows)<=3000: fail("Нет платежей или превышен размер реестра")
-    clean=[]; keys=set(); total=0
+    clean=[]; keys=set(); total=0; doc_count=0
     for r in rows:
         if not isinstance(r,dict): fail("Неверная строка")
         org=name(r.get("org"),200); supplier=name(r.get("supplier")); key=(org,supplier)
@@ -50,6 +50,8 @@ def normalize(raw):
         keys.add(key)
         docs=r.get("documents")
         if not isinstance(docs,list) or not 0<len(docs)<=3000: fail("Нет входящих документов")
+        doc_count+=len(docs)
+        if doc_count>15000:fail("Слишком много документов в реестре")
         seen=set(); detail=[]; subtotal=0
         for d in docs:
             if not isinstance(d,dict): fail("Неверный документ")
@@ -58,10 +60,10 @@ def normalize(raw):
             seen.add(id_)
             amount=cents(d.get("cents")); subtotal+=amount
             detail.append({"id":id_,"number":name(d.get("number") or "Без номера"),"date":day(d["date"]) if d.get("date") else None,"due":day(d["due"]) if d.get("due") else None,"cents":amount})
-        if subtotal!=r.get("cents"): fail("Сумма документов не совпадает")
+        if type(r.get("cents")) is not int or subtotal!=r.get("cents"): fail("Сумма документов не совпадает")
         clean.append({"org":org,"supplier":supplier,"cents":subtotal,"documents":detail})
         total+=subtotal
-    if total!=raw.get("totalCents") or total>=MAX_CENTS: fail("Итог реестра не совпадает")
+    if type(raw.get("totalCents")) is not int or total!=raw.get("totalCents") or total>=MAX_CENTS: fail("Итог реестра не совпадает")
     return {"date":date,"rows":clean,"totalCents":total}
 
 def excel(p):
@@ -170,7 +172,7 @@ def create_app(config=None):
             return check
         return wrap
     def body():
-        v=request.get_json()
+        v=request.get_json(silent=True)
         if not isinstance(v,dict):fail("Ожидается объект JSON")
         return v
     def get(con,id_):
@@ -301,11 +303,12 @@ def create_app(config=None):
     def subscription():
         raw=body();endpoint=raw.get("endpoint");keys=raw.get("keys")
         if not isinstance(endpoint,str) or len(endpoint)>2000 or not isinstance(keys,dict):fail("Неверная подписка")
-        u=urlsplit(endpoint);host=u.hostname or ""
-        if u.scheme!="https" or u.username or u.password or u.port not in (None,443) or not (host in ("fcm.googleapis.com","updates.push.services.mozilla.com","web.push.apple.com") or host.endswith(".push.apple.com")):fail("Неизвестный сервис push")
+        try:u=urlsplit(endpoint);host=u.hostname or "";port=u.port
+        except ValueError:fail("Неверный адрес подписки")
+        if u.scheme!="https" or u.username or u.password or port not in (None,443) or not (host in ("fcm.googleapis.com","updates.push.services.mozilla.com","web.push.apple.com") or host.endswith(".push.apple.com")):fail("Неизвестный сервис push")
         for k in ("p256dh","auth"):
             if not isinstance(keys.get(k),str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,200}",keys[k]):fail("Неверный ключ подписки")
-        with tx() as con:con.execute("INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,data=excluded.data",(endpoint,g.user["id"],json.dumps({"endpoint":endpoint,"keys":keys})))
+        with tx() as con:con.execute("INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,data=excluded.data",(endpoint,g.user["id"],json.dumps({"endpoint":endpoint,"keys":keys,"showSummary":raw.get("showSummary") is True})))
         return jsonify(ok=True)
     @app.post("/api/unsubscribe")
     @role()
@@ -316,7 +319,7 @@ def create_app(config=None):
         return jsonify(ok=True)
     @app.get("/")
     def index():return send_from_directory(ROOT/"static","index.html")
-    @app.get("/<any(app.js,app.css,manifest.webmanifest,sw.js,icon.svg):file>")
+    @app.get("/<any(app.js,app.css,manifest.webmanifest,sw.js,icon.svg,icon-192.png,icon-512.png,apple-touch-icon.png):file>")
     def static_file(file):return send_from_directory(ROOT/"static",file)
     @app.get("/desktop/")
     def desktop():
