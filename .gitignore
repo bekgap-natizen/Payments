@@ -14,3 +14,9 @@ playwright-report/
 !assets/volmax-mark.png
 dist/
 *.jsonl
+
+**/data/
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
