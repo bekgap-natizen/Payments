@@ -26,9 +26,10 @@ async function importReport(file,day){
 }
 async function exportXlsx(){if(!state.snapshot)return;
  try{const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);
- const selection=paymentSelection(model);
+ const selection=paymentSelection(model),stamp=JSON.stringify([state.date,state.snapshot.fingerprint,state.settings,state.plans]);
  if(!selection.cents)throw Error('Нет выбранных платежей без расхождений');
  if(!await appConfirm('Подтвердить реестр на '+rub(selection.cents)+' по '+selection.eligible.length+' поставщикам? Все организации, независимо от фильтра. Спорные суммы исключены. Деньги не переводятся.'))return;
+ if(JSON.stringify([state.date,state.snapshot?.fingerprint,state.settings,state.plans])!==stamp)throw Error('Реестр изменился во время подтверждения. Повторите выгрузку');
  const next={...state.plans};for(const r of selection.eligible){next[planId(r.key)]={...r.plan,status:'approved',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()};}
  const finalModel=C.analyze(state.snapshot,state.date,state.settings,next);
  const approved=finalModel.active.filter(r=>selection.eligible.some(x=>x.key===r.key));

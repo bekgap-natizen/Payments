@@ -14,11 +14,11 @@ function docRows(r){
  </tbody></table></div>`;
 }
 function vendorCard(r){const p=r.plan||{},items=selectedItems(r),chosen=selectedSum(r),approved=p.status==='approved'&&!r.planNeedsReview;
- const paid=paidStatus(r), locked=approved||paid,canApprove=!locked&&!r.planNeedsReview&&chosen>0;
+ const paid=paidStatus(r), locked=approved||paid,canApprove=!locked&&!paymentBlocked(r)&&chosen>0;
  const count=Object.values(items).filter(x=>x>0).length;
  const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0);
  const pick=supplierCheckboxState(r);const blocked=paymentBlocked(r);
- return `<details class="detail vendor-card" data-vendor="${esc(r.key)}" ${state.openVendors.has(r.key)?'open':''}><summary><div class="vendor-summary"><input class="supplier-pick" type="checkbox" data-supplier-select="${esc(r.key)}" aria-label="Выбрать поставщика ${esc(r.supplier)}" title="${pick.checked?'Снять выбор поставщика':'Распределить свободный остаток плана; без плана — по сроку'}" ${pick.checked?'checked':''} ${pick.partial?'data-partial="true" aria-checked="mixed"':''} ${pick.disabled?'disabled':''}><span class="vendor-title">${esc(r.supplier)}</span><span class="vendor-metrics"><span>Долг 1С <b>${rub(r.debtCents)}</b></span><span>По сроку <b>${rub(r.dueCents)}</b></span><span class="${chosen?'positive':''}">Выбрано <b>${rub(chosen)}</b></span></span><span class="badge ${blocked?'badge-bad badge-review':paid?'badge-neutral':approved?'badge-good':count?'badge-blue':'badge-neutral'}">${blocked?'Сверить':labelOf(p.status)}</span></div></summary>
+ return `<details class="detail vendor-card" data-vendor="${esc(r.key)}" ${state.openVendors.has(r.key)?'open':''}><summary><div class="vendor-summary"><input class="supplier-pick" type="checkbox" data-supplier-select="${esc(r.key)}" aria-label="Выбрать поставщика ${esc(r.supplier)}" title="${pick.checked?'Снять выбор поставщика':'Распределить свободный остаток плана; без плана — по сроку'}" ${pick.checked?'checked':''} ${pick.disabled?'disabled':''}><span class="vendor-title">${esc(r.supplier)}</span><span class="vendor-metrics"><span>Долг 1С <b>${rub(r.debtCents)}</b></span><span>По сроку <b>${rub(r.dueCents)}</b></span><span class="${chosen?'positive':''}">Выбрано <b>${rub(chosen)}</b></span></span><span class="badge ${blocked?'badge-bad badge-review':paid?'badge-neutral':approved?'badge-good':count?'badge-blue':'badge-neutral'}">${blocked?'Сверить':labelOf(p.status)}</span></div></summary>
  <div class="detailbody"><div class="ledger-ribbon"><div><span>Долг по 1С</span><b>${rub(r.debtCents)}</b></div><div><span>Из него распределено</span><b>${rub(r.allocatedCents)}</b></div><div><span>К оплате по сроку</span><b>${rub(r.dueCents)}</b></div><div><span>Остаток после отметки оплаты</span><b>${rub(r.leftCents)}</b></div></div>
  ${r.flags.length?`<div class="alert amber">${esc(r.flags.join(' • '))}</div>`:''}
  <div class="vendor-tools"><div><b>Отсрочка ${r.delay} дн.</b> · ${docs.length} документов с расчётным остатком · выбрано ${count}</div><div class="section-actions"><button class="btn btn-sm" data-act="select-due" data-key="${esc(r.key)}" ${locked?'disabled':''}>✓ Выбрать по сроку</button><button class="btn btn-sm" data-act="clear" data-key="${esc(r.key)}" ${locked?'disabled':''}>Снять выбор</button></div></div>
@@ -56,8 +56,7 @@ function supplierCheckboxState(r){
  const chosen=selectedSum(r),paid=paidStatus(r),blocked=paymentBlocked(r),locked=budgetLocked(r);
  const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0&&d.remainingCents>0);
  const budget=budgetStore()[orgBudgetKey(r.org)];
- const partial=chosen>0&&docs.some(d=>Number(selectedItems(r)[d.id]||0)<d.remainingCents);
- return {checked:chosen>0&&!paid,partial:partial&&!paid,disabled:locked||(!chosen&&(blocked||!docs.some(d=>Number.isSafeInteger(budget)||d.dueNow)))};
+ return {checked:chosen>0&&!paid,disabled:locked||(!chosen&&(blocked||!docs.some(d=>Number.isSafeInteger(budget)||d.dueNow)))};
 }
 function budgetPanel(model,orgs){
  const budgets=budgetStore(), priorities=priorityStore();
@@ -77,13 +76,13 @@ async function runOrgBudget(org){
  const snapshot=state.snapshot,date=state.date,priorPlans=JSON.stringify(state.plans),priorSettings=JSON.stringify(state.settings);
  const model=C.analyze(snapshot,date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
  if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
- const preserve=r=>budgetLocked(r)||(!r.planNeedsReview&&r.plan.manual===true);
+ const preserve=r=>budgetLocked(r)||r.plan.manual===true||r.planNeedsReview;
  const locked=budgetSelected(rr.filter(preserve));
  const committedExcess=Math.max(0,locked-b);
  const candidates=rr.filter(r=>!preserve(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
  candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
  if(!await appConfirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Автоматические черновики будут пересчитаны. Ручные изменения, утверждённые и оплаченные суммы сохранятся.'))return;
- if(state.snapshot!==snapshot||state.date!==date||JSON.stringify(state.plans)!==priorPlans||JSON.stringify(state.settings)!==priorSettings)throw Error('Данные изменились во время подтверждения. Повторите распределение');
+ if(state.snapshot!==snapshot||state.date!==date||JSON.stringify(state.plans)!==priorPlans||JSON.stringify(state.settings)!==priorSettings||JSON.stringify(priorityStore())!==JSON.stringify(priorities))throw Error('Данные изменились во время подтверждения. Повторите распределение');
  let left=Math.max(0,b-locked);const next={...state.plans}, plans=new Map();
  for(const r of rr.filter(r=>!preserve(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
  for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}

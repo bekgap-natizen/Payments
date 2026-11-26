@@ -113,3 +113,22 @@ test('startup deadline reports failure without sending payment',async()=>{
  await assert.rejects(ctx.mailEnsureServer('token'),/Mail Server не ответил/);
  assert.equal(launches,1);
 });
+
+test('changed register during mail confirmation is never sent',async()=>{
+ const state={date:'2026-11-24',plans:{}},calls=[];
+ const ctx={state,$:()=>null,fmtDate:String,rub:String,saveLocal:()=>{},draw:()=>{},toast:()=>{},appDialog:async()=>{state.plans.changed=true;return true;}};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailDraft=()=>({next:{approved:true},book:{},payload:{date:state.date,totalCents:100,organizations:[]},supplierCount:1});
+ ctx.mailConnect=async()=>({sender:'employee@example.invalid',token:'test-token'});ctx.blobBase64=async()=>'test';
+ ctx.mailFetch=async()=>{calls.push('send');return {ok:true,status:'accepted'}};
+ await ctx.sendPaymentMail();assert.equal(calls.length,0);assert.equal(state.plans.changed,true);
+});
+test('mail acceptance never overwrites changes made while SMTP was in progress',async()=>{
+ const state={date:'2026-11-24',plans:{}},messages=[];
+ const ctx={state,$:()=>null,fmtDate:String,rub:String,saveLocal:()=>{},draw:()=>{},toast:m=>messages.push(m),appDialog:async()=>true};
+ vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.mailDraft=()=>({next:{approved:true},book:{},payload:{date:state.date,totalCents:100,organizations:[]},supplierCount:1});
+ ctx.mailConnect=async()=>({sender:'employee@example.invalid',token:'test-token'});ctx.blobBase64=async()=>'test';
+ ctx.mailFetch=async()=>{state.plans.changed=true;return {ok:true,status:'accepted'}};
+ await ctx.sendPaymentMail();assert.equal(state.plans.changed,true);assert.equal(state.plans.approved,undefined);assert.match(messages.at(-1),/не перезаписаны/);
+});
