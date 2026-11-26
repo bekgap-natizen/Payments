@@ -25,7 +25,8 @@ function fillSupplierFromBudget(r,p){
  const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);
  const rr=model.active.filter(x=>x.org===r.org);
  const hasBudget=Number.isSafeInteger(b)&&b>=0;
- let left=hasBudget?Math.max(0,b-budgetSelected(rr)):Math.max(0,r.leftCents-checkTotal(r,p.items));
+ let left=Math.max(0,r.leftCents-checkTotal(r,p.items));
+ if(hasBudget)left=Math.min(left,Math.max(0,b-budgetSelected(rr)));
  if(!left)return 0;
  let added=0;
  // Follow the existing allocation order (oldest eligible invoice first, with due ones first).
@@ -33,7 +34,7 @@ function fillSupplierFromBudget(r,p){
  for(const d of docs){
   if(!left)break;
   if(Object.hasOwn(p.items,d.id))continue; // Never replace an existing document choice.
-  const n=Math.min(left,d.remainingCents,Math.max(0,r.leftCents-checkTotal(r,p.items)));
+  const n=Math.min(left,d.remainingCents);
   if(n>0){p.items[d.id]=n;left-=n;added+=n;}
  }
  checkTotal(r,p.items);return added;
