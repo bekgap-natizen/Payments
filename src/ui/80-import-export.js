@@ -24,7 +24,7 @@ async function importReport(file,day){
  }catch(e){toast('Ошибка: '+e.message,10000);}
  finally{importBusy=false;if(input){input.disabled=false;input.value='';}if(progress)progress.textContent='';}
 }
-async function exportXlsx(){if(!state.snapshot)return;
+async function exportXlsx(){if((typeof approvalHosted==='function'&&approvalHosted()))return toast('Скачайте утверждённый реестр в разделе согласования');if(!state.snapshot)return;
  try{const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);
  const selection=paymentSelection(model);
  if(!selection.cents)throw Error('Нет выбранных платежей без расхождений');
