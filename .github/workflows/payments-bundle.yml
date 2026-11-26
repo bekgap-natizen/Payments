@@ -21,6 +21,11 @@ jobs:
           node-version: '22'
       - name: Build and test application
         run: npm test
+      - name: Verify actual browser supplier selection and Excel download
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          python tests/browser_payments_regression.py
       - name: Package AppBox Standard ZIP
         run: node scripts/package-appbox.mjs
       - uses: actions/upload-artifact@v4
