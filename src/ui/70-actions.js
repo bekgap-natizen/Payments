@@ -6,7 +6,7 @@ function getPlan(r){const prev=state.plans[planId(r.key)]||{};
  if(r.planNeedsReview)return {items:{},status:'draft'};
  return {items:{...(prev.items||{})},status:'draft'};
 }
-function savePlan(r,plan){plan.sourceFingerprint=state.snapshot.fingerprint;plan.delayDays=r.delay;plan.changedAt=new Date().toISOString();state.plans[planId(r.key)]=plan;saveLocal('plans',state.plans);draw();}
+function savePlan(r,plan){plan.manual=true;plan.sourceFingerprint=state.snapshot.fingerprint;plan.delayDays=r.delay;plan.changedAt=new Date().toISOString();state.plans[planId(r.key)]=plan;saveLocal('plans',state.plans);draw();}
 function checkTotal(r,items){const docs=new Map(r.allocatedDocuments.map(d=>[d.id,d]));let sum=0;
  for(const [id,value] of Object.entries(items)){const d=docs.get(id);if(!d)throw Error('Документ больше не найден — обновите выбор');if(!Number.isSafeInteger(value)||value<=0||value>d.remainingCents)throw Error('Сумма по документу должна быть больше нуля и не превышать его остаток');sum+=value;}
  if(sum>r.leftCents)throw Error('Выбрано больше конечной задолженности поставщика по 1С');return sum;}
@@ -18,12 +18,43 @@ function updateDocument(k,id,mode,value){const r=currentRow(k);if(!r)return toas
  else {const val=C.cents(value);if(val===null||val<0||val>d.remainingCents)throw Error('Неверная сумма: допустимо от нуля до '+rub(d.remainingCents));if(val===0)delete p.items[id];else p.items[id]=val;}
  checkTotal(r,p.items);state.openVendors.add(k);savePlan(r,p);
  }catch(e){toast('Ошибка: '+e.message,6500);draw();}}
+// Explicit supplier choice uses only the unapplied budget of its own organization.
+function fillSupplierFromBudget(r,p){
+ if(paymentBlocked(r))throw Error('Долг по поставщику требует сверки');
+ const b=budgetStore()[orgBudgetKey(r.org)];
+ const model=C.analyze(state.snapshot,state.date,state.settings,state.plans);
+ const rr=model.active.filter(x=>x.org===r.org);
+ const hasBudget=Number.isSafeInteger(b)&&b>=0;
+ let left=hasBudget?Math.max(0,b-budgetSelected(rr)):Math.max(0,r.leftCents-checkTotal(r,p.items));
+ if(!left)return 0;
+ let added=0;
+ // Follow the existing allocation order (oldest eligible invoice first, with due ones first).
+ const docs=r.allocatedDocuments.filter(d=>d.remainingCents>0&&(hasBudget||d.dueNow)).slice().sort((a,b)=>Number(!!b.dueNow)-Number(!!a.dueNow)||(a.dueDate||'9999-99-99').localeCompare(b.dueDate||'9999-99-99')||(a.incomingDate||'9999-99-99').localeCompare(b.incomingDate||'9999-99-99')||a.row-b.row);
+ for(const d of docs){
+  if(!left)break;
+  if(Object.hasOwn(p.items,d.id))continue; // Never replace an existing document choice.
+  const n=Math.min(left,d.remainingCents,Math.max(0,r.leftCents-checkTotal(r,p.items)));
+  if(n>0){p.items[d.id]=n;left-=n;added+=n;}
+ }
+ checkTotal(r,p.items);return added;
+}
 async function action(k,act){const r=currentRow(k);if(!r)return toast('Нет поставщика');
  const prev=state.plans[planId(k)]||{},current=r.plan||{};
  try{
+ if(act==='toggle-supplier'){
+  const p=getPlan(r);
+  if(selectedSum(r)>0){
+   if(!await appConfirm('Снять выбор по '+r.supplier+'? Все назначенные суммы по этому поставщику, включая ручные, будут отменены. Другие поставщики не изменятся.')){draw();return;}
+   if(state.plans[planId(k)]!==prev||currentRow(k)?.key!==k){draw();throw Error('План изменился. Повторите действие');}
+   p.items={};savePlan(r,p);return;
+  }
+  const added=fillSupplierFromBudget(r,p);
+  if(!added){draw();toast('Нет свободной суммы плана или доступных документов. Отдельные суммы можно назначить вручную.');return;}
+  savePlan(r,p);toast('Распределено по поставщику: '+rub(added));return;
+ }
  if(act==='select-due'||act==='clear'||act==='clear-due'){
  const p=getPlan(r);
- if(act==='clear')p.items={};
+ if(act==='clear'){if(Object.keys(p.items).length&&!await appConfirm('Снять все выбранные суммы по '+r.supplier+', включая ручные?')){draw();return;}p.items={};}
  else if(act==='clear-due'){for(const d of r.allocatedDocuments){if(d.dueNow)delete p.items[d.id];}}
  else for(const d of r.allocatedDocuments){if(d.allocatedCents>0&&d.dueNow&&d.remainingCents>0&&!Object.hasOwn(p.items,d.id))p.items[d.id]=d.remainingCents;}
  checkTotal(r,p.items);state.openVendors.add(k);savePlan(r,p);return;
