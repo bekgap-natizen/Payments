@@ -13,6 +13,7 @@ COPY approval_server/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && useradd --uid 10001 --create-home app && mkdir /data && chown app:app /data
 COPY approval_server /app/approval_server
 COPY --from=build /src/dist /app/dist
+RUN python -m approval_server.make_icons /app/dist/assets/volmax-mark.png
 USER app
 ENV PAYMENTS_DB=/data/approval.sqlite3
 EXPOSE 8080
