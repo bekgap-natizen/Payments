@@ -66,6 +66,7 @@ async function action(k,act){const r=currentRow(k);if(!r)return toast('Нет п
  state.plans[planId(k)]={...prev,status:'draft',changedAt:new Date().toISOString()};saveLocal('plans',state.plans);draw();return;
  }
  if(act==='approve'){
+ if((typeof approvalHosted==='function'&&approvalHosted()))throw Error('Окончательное утверждение выполняет генеральный директор в разделе согласования');
  if(r.planNeedsReview)throw Error('Изменился отчёт или отсрочка: пересоздайте выбор по документам');
  const sum=checkTotal(r,prev.items||{});if(!sum)throw Error('Сначала выберите документы галочками');
  if(paymentBlocked(r))throw Error('Долг по поставщику требует сверки');
