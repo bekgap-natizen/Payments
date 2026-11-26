@@ -119,6 +119,7 @@ function mailDraft(){
     supplierCount:active.length};
 }
 async function sendPaymentMail(){
+ if((typeof approvalHosted==='function'&&approvalHosted()))return toast('Отправка доступна из утверждённого реестра');
  if(mailBusy)return;
  mailBusy=true;
  const button=$("send-payments-mail");
