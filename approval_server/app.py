@@ -319,8 +319,10 @@ def create_app(config=None):
         return jsonify(ok=True)
     @app.get("/")
     def index():return send_from_directory(ROOT/"static","index.html")
-    @app.get("/<any(app.js,app.css,manifest.webmanifest,sw.js,icon.svg,icon-192.png,icon-512.png,apple-touch-icon.png):file>")
-    def static_file(file):return send_from_directory(ROOT/"static",file)
+    @app.get("/<file>")
+    def static_file(file):
+        if file not in {"app.js","app.css","manifest.webmanifest","sw.js","icon.svg","icon-192.png","icon-512.png","apple-touch-icon.png"}:fail("Не найдено",404)
+        return send_from_directory(ROOT/"static",file)
     @app.get("/desktop/")
     def desktop():
         if not g.user or g.user["role"]!="accountant":return redirect("/")
