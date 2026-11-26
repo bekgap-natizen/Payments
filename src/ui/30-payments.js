@@ -74,7 +74,8 @@ async function runOrgBudget(org){
  const input=[...document.querySelectorAll('[data-budget-org]')].find(x=>x.dataset.budgetOrg===org);
  const b=C.cents(input?.value);if(!input?.value.trim()||!Number.isSafeInteger(b)||b<0)throw Error('Укажите неотрицательный лимит организации');
  input.value=currencyInput(b);(state.budgetInput??={})[orgBudgetKey(org)]=input.value;
- const model=C.analyze(state.snapshot,state.date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
+ const snapshot=state.snapshot,date=state.date,priorPlans=JSON.stringify(state.plans),priorSettings=JSON.stringify(state.settings);
+ const model=C.analyze(snapshot,date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
  if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
  const preserve=r=>budgetLocked(r)||(!r.planNeedsReview&&r.plan.manual===true);
  const locked=budgetSelected(rr.filter(preserve));
@@ -82,6 +83,7 @@ async function runOrgBudget(org){
  const candidates=rr.filter(r=>!preserve(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
  candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
  if(!await appConfirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Автоматические черновики будут пересчитаны. Ручные изменения, утверждённые и оплаченные суммы сохранятся.'))return;
+ if(state.snapshot!==snapshot||state.date!==date||JSON.stringify(state.plans)!==priorPlans||JSON.stringify(state.settings)!==priorSettings)throw Error('Данные изменились во время подтверждения. Повторите распределение');
  let left=Math.max(0,b-locked);const next={...state.plans}, plans=new Map();
  for(const r of rr.filter(r=>!preserve(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
  for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}
