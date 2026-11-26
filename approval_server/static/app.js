@@ -67,7 +67,8 @@ async function pushSetup(){
  const permission=await Notification.requestPermission();if(permission!=='granted'){notice('Разрешите уведомления в настройках устройства.');return;}
  const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();
  if(!sub){const s=me.vapidPublicKey.replace(/-/g,'+').replace(/_/g,'/');const key=Uint8Array.from(atob(s.padEnd(Math.ceil(s.length/4)*4,'=')),c=>c.charCodeAt(0));sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});}
- await api('/api/subscriptions',sub.toJSON());notice('Уведомления подключены на этом устройстве.');
+ const showSummary=window.confirm('Показывать организации, поставщиков и суммы в push на экране блокировки? Нажмите «Отмена» для уведомлений без финансовых данных.');
+ await api('/api/subscriptions',{...sub.toJSON(),showSummary});notice('Уведомления подключены на этом устройстве.');
 }
 const MAIL='http://127.0.0.1:8765';
 async function localMail(path,body,token=''){
