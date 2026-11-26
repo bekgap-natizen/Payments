@@ -6,4 +6,5 @@ function draw(){let model=state.snapshot?C.analyze(state.snapshot,state.date,sta
  $('breadcrumb-active').textContent=pages[state.page];$('snapshot-indicator').textContent=state.snapshot?'Срез: '+fmtDate(state.date):'Отчёт не загружен';
  const fn={overview:renderOverview,payments:renderPayments,suppliers:renderSuppliers,reconcile:renderReconcile,import:renderImport};
  $('page-'+state.page).innerHTML=fn[state.page](model);
+ if(state.page==='payments')document.querySelectorAll('[data-supplier-select][data-partial]').forEach(el=>{el.indeterminate=true;});
 }
