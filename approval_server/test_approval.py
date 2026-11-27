@@ -108,6 +108,28 @@ class ApprovalTest(unittest.TestCase):
         self.assertEqual(client.post("/api/pair",json={"code":code},headers={"Origin":ORIGIN}).status_code,200)
         self.assertEqual(client.get("/api/me").json["role"],"commercial")
         self.assertEqual(self.app.test_client().post("/api/pair",json={"code":code},headers={"Origin":ORIGIN}).status_code,401)
+    def test_unified_smtp_uses_approved_server_payload(self):
+        class FakeMail:
+            def __init__(self):self.payloads=[]
+            def credentials(self):return ("example@example.invalid","dummy")
+            def send(self,payload,force=False):
+                self.payloads.append((payload,force))
+                import base64
+                sys.path.insert(0,str(Path(__file__).resolve().parent.parent/"mail_server"))
+                import server
+                server.check_xlsx(base64.b64decode(payload["xlsxBase64"]),payload["totalCents"])
+                return {"ok":True,"status":"accepted"}
+        fake=FakeMail();self.app.config["MAIL_SERVICE"]=fake
+        id_=self.submit()
+        path=f"/api/registers/{id_}/send-mail"
+        self.assertEqual(self.post("bookkeeper",path,{"version":1}).status_code,409)
+        self.post("observer",f"/api/registers/{id_}/decision",{"action":"approve","version":1})
+        self.assertEqual(self.post("director",path,{"version":2}).status_code,403)
+        r=self.post("bookkeeper",path,{"version":2,"totalCents":1})
+        self.assertEqual(r.json,{"ok":True,"status":"sent"})
+        self.assertEqual(fake.payloads[0][0]["totalCents"],150000)
+        self.assertEqual(self.post("bookkeeper",path,{"version":2}).status_code,409)
+        self.assertEqual(len(fake.payloads),1)
     def test_wrong_total_duplicate(self):
         p=self.payload();p["totalCents"]+=1
         self.assertEqual(self.post("bookkeeper","/api/registers",p).status_code,400)

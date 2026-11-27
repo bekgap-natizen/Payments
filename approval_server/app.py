@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -136,6 +137,7 @@ def create_app(config=None):
     origin=app.config["PUBLIC_ORIGIN"].rstrip("/")
     if not app.testing and (not origin.startswith("https://") or urlsplit(origin).path or not urlsplit(origin).hostname): raise RuntimeError("Set PAYMENTS_ORIGIN to the dedicated HTTPS origin")
     path=Path(app.config["DB"]);path.parent.mkdir(parents=True,exist_ok=True)
+    mail_lock=threading.Lock()
     def connection():
         con=sqlite3.connect(path,timeout=15,isolation_level=None);con.row_factory=sqlite3.Row;con.execute("PRAGMA foreign_keys=ON");return con
     with contextlib.closing(connection()) as con:con.executescript(SCHEMA);con.execute("PRAGMA journal_mode=WAL")
@@ -315,6 +317,10 @@ def create_app(config=None):
     @app.post("/api/registers/<int:id_>/send-mail")
     @role("accountant")
     def send_mail(id_):
+        if not mail_lock.acquire(blocking=False):fail("Отправка уже выполняется",409)
+        try:return send_mail_locked(id_)
+        finally:mail_lock.release()
+    def send_mail_locked(id_):
         service=app.config.get("MAIL_SERVICE")
         if service is None:fail("Единый VOLMAX Server не подключён",409)
         if not service.credentials():fail("Настройте почту в локальном VOLMAX Server",409)
@@ -344,7 +350,9 @@ def create_app(config=None):
     @role("accountant")
     def send_state(id_):
         raw=body();action=raw.get("action")
-        if app.config.get("MAIL_SERVICE") is not None and action in ("begin","accepted","uncertain"):fail("Используйте отправку через единый сервер",409)
+        if app.config.get("MAIL_SERVICE") is not None:
+            if action in ("begin","accepted","uncertain"):fail("Используйте отправку через единый сервер",409)
+            if mail_lock.locked():fail("Отправка ещё выполняется",409)
         with tx() as con:
             r=get(con,id_)
             if raw.get("version")!=r["version"]:fail("Реестр изменился. Обновите страницу.",409)

@@ -1,4 +1,4 @@
-name: Mobile approval pilot tests and package
+name: Unified Windows Payments pilot
 on:
   push:
     branches: [mobile-approval-070]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 jobs:
-  test-and-package:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,23 +17,71 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm test
-      - run: pip install -r approval_server/requirements.txt
+      - run: pip install -r approval_server/requirements.txt playwright
       - run: python -m unittest discover -s approval_server -p 'test_*.py' -v
+      - run: python -m unittest discover -s mail_server -p 'test_*.py' -v
       - run: node --check approval_server/static/app.js && node --check approval_server/static/sw.js
       - run: python -m approval_server.make_icons assets/volmax-mark.png
-      - name: Build separate pilot package (source and deployment instructions)
+      - run: python -m playwright install --with-deps chromium
+      - run: python tests/browser_payments_regression.py
+      - run: python -m approval_server.browser_integration
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm run build
+      - run: pip install -r approval_server/requirements.txt
+      - run: python -m approval_server.make_icons assets/volmax-mark.png
+      - run: python -m unittest discover -s mail_server -p 'test_*.py' -v
+      - name: Create portable Windows bundle
+        shell: pwsh
         run: |
-          mkdir -p release
-          zip -q -r release/VOLMAX-Payments-Mobile-Pilot.zip approval_server assets src scripts mail_server package.json index.html .dockerignore -x '*/__pycache__/*' '*/data/*' '*/.env' '*.sqlite*'
-          unzip -tqq release/VOLMAX-Payments-Mobile-Pilot.zip
-          sha256sum release/VOLMAX-Payments-Mobile-Pilot.zip > release/SHA256SUMS.txt
+          $ErrorActionPreference = 'Stop'
+          $root = "release/unified"
+          New-Item -ItemType Directory -Force -Path "$root/python", "$root/server" | Out-Null
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile release/embedded.zip
+          Expand-Archive release/embedded.zip -DestinationPath "$root/python"
+          python -m pip install --target "$root/python/Lib/site-packages" -r approval_server/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+          @('python312.zip','.','..\server','Lib\site-packages','import site') | Set-Content "$root/python/python312._pth" -Encoding ascii
+          Copy-Item mail_server/server.py,mail_server/mobile_host.py "$root/server"
+          Copy-Item approval_server "$root/server/approval_server" -Recurse
+          Copy-Item dist "$root/server/dist" -Recurse
+          Copy-Item assets "$root/server/assets" -Recurse
+          Copy-Item approval_server/README.md "$root/README.txt"
+          Get-ChildItem "$root/server" -Recurse -Directory -Filter __pycache__ | Remove-Item -Force -Recurse
+          @'
+          @echo off
+          cd /d "%~dp0"
+          "%~dp0python\python.exe" "%~dp0server\server.py"
+          if errorlevel 1 pause
+          '@ | Set-Content "$root/Start-VOLMAX-Server.bat" -Encoding ascii
+          & "$root/python/python.exe" -c "import server,mobile_host,flask,waitress,pywebpush,qrcode; from approval_server.app import create_app; print('Portable unified imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Portable runtime failed" }
+          Compress-Archive -Path "$root/*" -DestinationPath release/VOLMAX-Server-Windows-Pilot.zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: mobile-pilot
-          path: release/
-      - name: Publish isolated prerelease
+          name: unified-windows
+          path: release/VOLMAX-Server-Windows-Pilot.zip
+  release:
+    needs: [test, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: unified-windows
+          path: release
+      - name: Publish tested Windows pilot
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.7.0-mobile-pilot.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" release/VOLMAX-Payments-Mobile-Pilot.zip release/SHA256SUMS.txt --target "$GITHUB_SHA" --title "VOLMAX Payments 0.7.0 — мобильное согласование (пилот)" --notes "Отдельный пакет серверного пилота с ролями, версиями реестров, мобильным PWA, очередью push и отправкой через локальную почту. Требуется развёртывание на отдельном HTTPS origin, настройка учётных записей и проверка реальных устройств. Не заменяет 0.6.11." --prerelease
+          TAG="v0.7.0-unified-pilot.$GITHUB_RUN_NUMBER"
+          sha256sum release/VOLMAX-Server-Windows-Pilot.zip > release/SHA256SUMS.txt
+          gh release create "$TAG" release/VOLMAX-Server-Windows-Pilot.zip release/SHA256SUMS.txt --target "$GITHUB_SHA" --title "ВОЛМАКС Платежи 0.7.0 — единый Windows-сервер (пилот)" --notes "Для теста с вымышленными данными. Требуется постоянный HTTPS-адрес с маршрутизацией на loopback:8780. Настройки почты и AppBox 0.6.13 сохраняются, рабочее место мобильного пилота отдельное. Реальные push и SMTP не подтверждены." --prerelease
