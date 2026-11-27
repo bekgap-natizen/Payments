@@ -5,7 +5,7 @@ const vm=require('node:vm');
 const read=p=>fs.readFileSync(p,'utf8');
 function context(){
  const ctx={state:{onlyDue:false,paymentOrg:'',paymentSearch:'',date:'2026-11-16',openVendors:new Set()},C:{key:x=>String(x).toLowerCase()},header:()=>'',missing:()=>'',fmtDate:x=>x||'',rub:x=>String(x),esc:x=>String(x),kpi:()=>'',labelOf:x=>x||'',currencyInput:x=>String(x),paymentSelection:()=>({eligible:[],blocked:[],cents:0}),paymentBlocked:()=>false};
- vm.createContext(ctx);vm.runInContext(read('src/ui/30-payments.js'),ctx);return ctx;
+ vm.createContext(ctx);vm.runInContext(read('src/ui/30-payments.js'),ctx);vm.runInContext(read('src/ui/40-reconciliation.js'),ctx);return ctx;
 }
 const mkDoc=(id,date,due,amount=100)=>({id,row:1,incomingNumber:id,incomingDate:date,dueDate:date,allocatedCents:amount,remainingCents:amount,dueNow:due});
 const newDoc=mkDoc('DOC-FUTURE','2026-12-01',false),oldDoc=mkDoc('DOC-DUE','2026-10-01',true);
@@ -79,4 +79,27 @@ test('only the compact reconciliation badge is red; supplier card remains normal
  const css=read('src/styles/layout-safety.css');
  assert.doesNotMatch(css,/vendor-needs-review/);
  assert.match(css,/\.vendor-summary>\.badge\.badge-review\{background:#fde8ec;color:#b82538\}/);
+});
+
+test('payment review identifies each organization and supplier once and distinguishes overlapping reasons',()=>{
+ const c=context(),a=mk('REVIEW',{}),b=mk('REVIEW',{});
+ Object.assign(a,{key:'Org A¦REVIEW',org:'Org A',unallocatedCents:-37,unmatchedCents:42});
+ Object.assign(b,{key:'Org B¦REVIEW',org:'Org B',unallocatedCents:0,planNeedsReview:true,plan:{items:{'DOC-DUE':20}}});
+ const h=c.paymentReviewAlert([a,a,b]);
+ assert.equal((h.match(/data-reconcile-vendor=/g)||[]).length,2);
+ assert.match(h,/Org A — REVIEW/);assert.match(h,/Org B — REVIEW/);
+ assert.match(h,/Разница: <b>37/);assert.match(h,/Нераспределённый долг: <b>42/);
+ assert.match(h,/Сумма прежнего плана: <b>20/);
+ assert.equal(c.paymentReviewAlert([]),'');
+});
+test('focused reconciliation also works when raw 1C balances match but a plan needs review',()=>{
+ const c=context(),r=mk('REVIEW',{'DOC-DUE':20});
+ r.planNeedsReview=true;r.unallocatedCents=0;r.key='Org A¦REVIEW';
+ c.paymentBlocked=x=>x.planNeedsReview;
+ c.state.reconcileVendor=r.key;c.state.snapshot={audit:{docs:1,orgs:1,suppliers:1,missingDates:0}};
+ const model={active:[r],reconciliation:{issues:[],orgSummaries:[]},totals:{unmatchedCents:0}};
+ const h=c.renderReconcile(model);
+ assert.match(h,/REVIEW/);assert.match(h,/Сумма прежнего плана: <b>20/);
+ assert.doesNotMatch(h,/Итоговые суммы совпадают/);
+ c.state.reconcileVendor='';assert.match(c.renderReconcile(model),/Итоговые суммы совпадают/);
 });

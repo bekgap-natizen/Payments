@@ -38,9 +38,10 @@ class ApprovalTest(unittest.TestCase):
         self.assertEqual(self.post("bookkeeper","/api/registers",self.payload(),csrf=False).status_code,403)
         self.assertEqual(self.post("bookkeeper","/api/registers",self.payload(),origin="https://wrong.invalid").status_code,403)
         id_=self.submit()
-        self.assertEqual(self.post("observer",f"/api/registers/{id_}/decision",{"action":"approve","version":1}).status_code,403)
+        self.assertEqual(self.post("observer",f"/api/registers/{id_}/decision",{"action":"approve","version":1}).status_code,200)
+        self.assertEqual(self.post("director",f"/api/registers/{id_}/decision",{"action":"approve","version":1}).status_code,409)
         self.assertEqual(self.post("bookkeeper",f"/api/registers/{id_}/decision",{"action":"approve","version":1}).status_code,403)
-        self.assertEqual(self.get("bookkeeper",f"/api/registers/{id_}/excel").status_code,409)
+        self.assertEqual(self.get("bookkeeper",f"/api/registers/{id_}/excel").status_code,200)
     def test_return_revision_and_history(self):
         id_=self.submit()
         self.assertEqual(self.post("bookkeeper","/api/registers",self.payload()).status_code,409)
@@ -82,6 +83,31 @@ class ApprovalTest(unittest.TestCase):
         self.post("director",f"/api/registers/{id_}/decision",{"action":"approve","version":1})
         with sqlite3.connect(self.path) as con:
             self.assertEqual(set(x[0] for x in con.execute("SELECT o.user_id FROM outbox o JOIN events e ON o.event_id=e.id WHERE e.event='approved'")),{"bookkeeper","observer"})
+    def test_commercial_notification_and_overview(self):
+        for user in ("bookkeeper","observer","director"):
+            self.post(user,"/api/subscriptions",{"endpoint":"https://fcm.googleapis.com/fcm/send/"+user,"keys":{"p256dh":"a"*87,"auth":"b"*22}})
+        p=self.payload()
+        p["overview"]=[{"org":"Example A","supplier":"Example Vendor","debtCents":300000,"dueCents":200000}]
+        r=self.post("bookkeeper","/api/registers",p)
+        self.assertEqual(r.status_code,201,r.json)
+        id_=r.json["id"]
+        self.assertEqual(self.post("observer",f"/api/registers/{id_}/decision",{"action":"approve","version":1}).status_code,200)
+        with sqlite3.connect(self.path) as con:
+            self.assertEqual(set(x[0] for x in con.execute("SELECT o.user_id FROM outbox o JOIN events e ON o.event_id=e.id WHERE e.event='approved'")),{"bookkeeper","director"})
+        detail=self.get("director",f"/api/registers/{id_}").json
+        self.assertEqual(detail["payload"]["overview"],p["overview"])
+        self.assertEqual(detail["events"][-1]["actor"],"observer")
+        p["date"]="2026-01-16";p["overview"][0]["dueCents"]=400000
+        self.assertEqual(self.post("bookkeeper","/api/registers",p).status_code,400)
+    def test_single_use_pair(self):
+        import secrets, hashlib
+        code=secrets.token_urlsafe(32)
+        with sqlite3.connect(self.path) as con:
+            con.execute("INSERT INTO invitations VALUES(?,?,?)",(hashlib.sha256(code.encode()).hexdigest(),"observer","2099-01-01T00:00:00+00:00"))
+        client=self.app.test_client()
+        self.assertEqual(client.post("/api/pair",json={"code":code},headers={"Origin":ORIGIN}).status_code,200)
+        self.assertEqual(client.get("/api/me").json["role"],"commercial")
+        self.assertEqual(self.app.test_client().post("/api/pair",json={"code":code},headers={"Origin":ORIGIN}).status_code,401)
     def test_wrong_total_duplicate(self):
         p=self.payload();p["totalCents"]+=1
         self.assertEqual(self.post("bookkeeper","/api/registers",p).status_code,400)

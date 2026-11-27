@@ -14,11 +14,11 @@ function docRows(r){
  </tbody></table></div>`;
 }
 function vendorCard(r){const p=r.plan||{},items=selectedItems(r),chosen=selectedSum(r),approved=p.status==='approved'&&!r.planNeedsReview;
- const paid=paidStatus(r), locked=approved||paid,canApprove=!locked&&!r.planNeedsReview&&chosen>0;
+ const paid=paidStatus(r), locked=approved||paid,canApprove=!locked&&!paymentBlocked(r)&&chosen>0;
  const count=Object.values(items).filter(x=>x>0).length;
  const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0);
  const pick=supplierCheckboxState(r);const blocked=paymentBlocked(r);
- return `<details class="detail vendor-card" data-vendor="${esc(r.key)}" ${state.openVendors.has(r.key)?'open':''}><summary><div class="vendor-summary"><input class="supplier-pick" type="checkbox" data-supplier-select="${esc(r.key)}" aria-label="Выбрать поставщика ${esc(r.supplier)}" title="${pick.checked?'Снять выбор поставщика':'Распределить свободный остаток плана; без плана — по сроку'}" ${pick.checked?'checked':''} ${pick.partial?'data-partial="true" aria-checked="mixed"':''} ${pick.disabled?'disabled':''}><span class="vendor-title">${esc(r.supplier)}</span><span class="vendor-metrics"><span>Долг 1С <b>${rub(r.debtCents)}</b></span><span>По сроку <b>${rub(r.dueCents)}</b></span><span class="${chosen?'positive':''}">Выбрано <b>${rub(chosen)}</b></span></span><span class="badge ${blocked?'badge-bad badge-review':paid?'badge-neutral':approved?'badge-good':count?'badge-blue':'badge-neutral'}">${blocked?'Сверить':labelOf(p.status)}</span></div></summary>
+ return `<details class="detail vendor-card" data-vendor="${esc(r.key)}" ${state.openVendors.has(r.key)?'open':''}><summary><div class="vendor-summary"><input class="supplier-pick" type="checkbox" data-supplier-select="${esc(r.key)}" aria-label="Выбрать поставщика ${esc(r.supplier)}" title="${pick.checked?'Снять выбор поставщика':'Распределить свободный остаток плана; без плана — по сроку'}" ${pick.checked?'checked':''} ${pick.disabled?'disabled':''}><span class="vendor-title">${esc(r.supplier)}</span><span class="vendor-metrics"><span>Долг 1С <b>${rub(r.debtCents)}</b></span><span>По сроку <b>${rub(r.dueCents)}</b></span><span class="${chosen?'positive':''}">Выбрано <b>${rub(chosen)}</b></span></span><span class="badge ${blocked?'badge-bad badge-review':paid?'badge-neutral':approved?'badge-good':count?'badge-blue':'badge-neutral'}">${blocked?'Сверить':labelOf(p.status)}</span></div></summary>
  <div class="detailbody"><div class="ledger-ribbon"><div><span>Долг по 1С</span><b>${rub(r.debtCents)}</b></div><div><span>Из него распределено</span><b>${rub(r.allocatedCents)}</b></div><div><span>К оплате по сроку</span><b>${rub(r.dueCents)}</b></div><div><span>Остаток после отметки оплаты</span><b>${rub(r.leftCents)}</b></div></div>
  ${r.flags.length?`<div class="alert amber">${esc(r.flags.join(' • '))}</div>`:''}
  <div class="vendor-tools"><div><b>Отсрочка ${r.delay} дн.</b> · ${docs.length} документов с расчётным остатком · выбрано ${count}</div><div class="section-actions"><button class="btn btn-sm" data-act="select-due" data-key="${esc(r.key)}" ${locked?'disabled':''}>✓ Выбрать по сроку</button><button class="btn btn-sm" data-act="clear" data-key="${esc(r.key)}" ${locked?'disabled':''}>Снять выбор</button></div></div>
@@ -37,10 +37,10 @@ function renderPayments(model){if(!model)return header('Платежи на да
  if(state.onlyDue)rows=rows.filter(hasSelectedPayment);
  rows.sort((a,b)=>a.org.localeCompare(b.org,'ru')||b.dueCents-a.dueCents||a.supplier.localeCompare(b.supplier,'ru'));
  const names=[...new Set(rows.map(r=>r.org))];
- return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, (typeof approvalHosted==='function'&&approvalHosted())?`<button id="approval-home" class="btn">Реестры и история</button><button id="submit-approval" class="btn btn-primary">На согласование</button>`:`<button id="export-payments" class="btn btn-export-excel">Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn btn-primary">Подтвердить и отправить</button>`)+
+ return header('Платежи на дату',`Дата отчёта ${fmtDate(state.date)} · платёжный реестр по выбранным документам`, (typeof approvalHosted==="function"&&approvalHosted())?`<button id="approval-home" class="btn">Реестры и история</button><button id="submit-approval" class="btn btn-primary">На согласование</button>`:`<button id="export-payments" class="btn btn-export-excel">Подтвердить и выгрузить Excel</button><button id="send-payments-mail" class="btn btn-primary">Подтвердить и отправить</button>`)+
  `<div class="kpis">${kpi('Весь долг 1С',rub((model.rows||model.active).reduce((n,r)=>n+r.debtCents,0)),'Все поставщики','₽')}${kpi('Срок оплаты наступил',rub(model.totals.dueCents),'Действующие поставщики','◷')}${kpi('К оплате — выбрано',rub(selection.cents),'Итог будущего реестра','✓')}${kpi('Уже отмечено оплачено',rub(model.totals.paidCents),'В текущем срезе','●')}</div>
  <div class="alert"><span>Платежи по сроку отмечены автоматически. Измените выбор или сумму, затем подтвердите реестр. Расчёт остатков по накладным требует сверки зачётов 1С.</span></div>
- ${review.length||selection.blocked.length?`<div class="alert amber">Требуют проверки: ${new Set([...review,...selection.blocked].map(r=>r.key)).size} поставщиков. Спорные платежи исключены из реестра. <button class="btn btn-sm" data-page="reconcile">Сверка</button></div>`:''}
+ ${paymentReviewAlert([...review,...selection.blocked])}
  ${budgetPanel(model,orgs)}<div class="toolbar"><div class="field"><label>Организация</label><select class="control" id="payment-org"><option value="">Все организации</option>${orgs.map(o=>`<option value="${esc(o)}" ${o===state.paymentOrg?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Поиск поставщика</label><input id="payment-search" class="control search" value="${esc(state.paymentSearch)}" placeholder="Название поставщика"></div><label class="toggle-label"><input id="only-due" type="checkbox" ${state.onlyDue?'checked':''}> Только выбранные к оплате</label></div>
  ${!rows.length?`<div class="card"><div class="empty"><h2>${state.onlyDue?'Нет выбранных платежей':'Нет поставщиков для отображения'}</h2><p>${state.onlyDue?'Снимите фильтр, чтобы снова увидеть все документы.':'Укажите действующих контрагентов в справочнике или измените фильтры.'}</p>${state.onlyDue?'':'<button data-page="suppliers" class="btn btn-primary">Настроить поставщиков →</button>'}</div></div>`:''}
  ${names.map(org=>`<section class="org-block"><div class="org-head"><h2>${esc(org)}</h2><span>Долг: <b>${rub(rows.filter(r=>r.org===org).reduce((n,r)=>n+r.debtCents,0))}</b></span><span>К оплате: <b>${rub(selection.eligible.filter(r=>r.org===org).reduce((n,r)=>n+selectedSum(r),0))}</b></span></div>${rows.filter(r=>r.org===org).map(vendorCard).join('')}</section>`).join('')}
@@ -56,8 +56,7 @@ function supplierCheckboxState(r){
  const chosen=selectedSum(r),paid=paidStatus(r),blocked=paymentBlocked(r),locked=budgetLocked(r);
  const docs=r.allocatedDocuments.filter(d=>d.allocatedCents>0&&d.remainingCents>0);
  const budget=budgetStore()[orgBudgetKey(r.org)];
- const partial=chosen>0&&docs.some(d=>Number(selectedItems(r)[d.id]||0)<d.remainingCents);
- return {checked:chosen>0&&!paid,partial:partial&&!paid,disabled:locked||(!chosen&&(blocked||!docs.some(d=>Number.isSafeInteger(budget)||d.dueNow)))};
+ return {checked:chosen>0&&!paid,disabled:locked||(!chosen&&(blocked||!docs.some(d=>Number.isSafeInteger(budget)||d.dueNow)))};
 }
 function budgetPanel(model,orgs){
  const budgets=budgetStore(), priorities=priorityStore();
@@ -77,13 +76,13 @@ async function runOrgBudget(org){
  const snapshot=state.snapshot,date=state.date,priorPlans=JSON.stringify(state.plans),priorSettings=JSON.stringify(state.settings);
  const model=C.analyze(snapshot,date,state.settings,state.plans), rr=model.active.filter(r=>r.org===org), priorities=priorityStore();
  if(rr.some(r=>r.planNeedsReview&&['approved','paid'].includes(r.plan.status)))throw Error('Сначала сверить ранее утверждённые или оплаченные планы');
- const preserve=r=>budgetLocked(r)||(!r.planNeedsReview&&r.plan.manual===true);
+ const preserve=r=>budgetLocked(r)||r.plan.manual===true||r.planNeedsReview;
  const locked=budgetSelected(rr.filter(preserve));
  const committedExcess=Math.max(0,locked-b);
  const candidates=rr.filter(r=>!preserve(r)&&!paymentBlocked(r)&&priorities[r.key]!=='blocked').flatMap(r=>r.allocatedDocuments.filter(d=>d.dueNow&&d.remainingCents>0).map(d=>({r,d,rank:priorities[r.key]==='critical'?0:d.overdue?1:2})));
  candidates.sort((a,b)=>a.rank-b.rank||a.d.dueDate.localeCompare(b.d.dueDate)||a.r.supplier.localeCompare(b.r.supplier,'ru')||a.d.id.localeCompare(b.d.id));
  if(!await appConfirm('Сформировать предложенный план по '+org+' на '+rub(b)+'? Автоматические черновики будут пересчитаны. Ручные изменения, утверждённые и оплаченные суммы сохранятся.'))return;
- if(state.snapshot!==snapshot||state.date!==date||JSON.stringify(state.plans)!==priorPlans||JSON.stringify(state.settings)!==priorSettings)throw Error('Данные изменились во время подтверждения. Повторите распределение');
+ if(state.snapshot!==snapshot||state.date!==date||JSON.stringify(state.plans)!==priorPlans||JSON.stringify(state.settings)!==priorSettings||JSON.stringify(priorityStore())!==JSON.stringify(priorities))throw Error('Данные изменились во время подтверждения. Повторите распределение');
  let left=Math.max(0,b-locked);const next={...state.plans}, plans=new Map();
  for(const r of rr.filter(r=>!preserve(r)))plans.set(r.key,{items:{},status:'draft',sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay,changedAt:new Date().toISOString()});
  for(const {r,d} of candidates){const n=Math.min(left,d.remainingCents);if(n>0){plans.get(r.key).items[d.id]=n;left-=n;}if(left===0)break;}

@@ -118,13 +118,15 @@ function mailDraft(){
  return {next,book,payload:{date:state.date,totalCents:selection.cents,organizations},
     supplierCount:active.length};
 }
+function mailStateStamp(){return JSON.stringify([state.date,state.snapshot?.fingerprint,state.settings,state.plans]);}
 async function sendPaymentMail(){
- if((typeof approvalHosted==='function'&&approvalHosted()))return toast('Отправка доступна из утверждённого реестра');
+ if(typeof approvalHosted==='function'&&approvalHosted())return toast('Отправка доступна из утверждённого реестра');
  if(mailBusy)return;
  mailBusy=true;
  const button=$("send-payments-mail");
  if(button){button.disabled=true;button.textContent="Готовим отправку…";}
  try{
+   const stamp=mailStateStamp();
    const draft=mailDraft();
    const fmt=fmtDate(state.date);
    const connected=await mailConnect();
@@ -135,16 +137,19 @@ async function sendPaymentMail(){
      "\nВ письме — таблица поставщиков; во вложении — Excel с документами.",{title:"Подтверждение отправки",ok:"Отправить"}))return;
    if(button)button.textContent="Отправляем…";
    const payload={...draft.payload,xlsxBase64:await blobBase64(draft.book)};
+   if(mailStateStamp()!==stamp)throw Error('Реестр изменился до отправки. Подтвердите актуальные суммы заново');
    let result;
    try{
      result=await mailFetch("/v1/send",payload,connected.token);
    }catch(err){
      if(/уже отправлялся|отправка была начата/i.test(err.message)){
        if(!await appConfirm("Этот реестр уже отправлялся или отправка была начата. Проверьте папку «Отправленные» Яндекса. Всё равно повторить отправку?"))return;
+       if(mailStateStamp()!==stamp)throw Error('Реестр изменился до повторной отправки');
        result=await mailFetch("/v1/send",{...payload,force:true},connected.token);
      }else throw err;
    }
    if(result.ok&&result.status==="accepted"){
+     if(mailStateStamp()!==stamp){toast('SMTP принял письмо с подтверждённым реестром, но локальные данные изменились. Новые суммы не перезаписаны. Проверьте отправленное письмо перед дальнейшими действиями.',15000);return;}
      state.plans=draft.next;saveLocal("plans",state.plans);draw();
      toast("SMTP Яндекса принял письмо от "+result.sender+". Проверьте доставку у получателей.",10000);
    }else throw Error("Нет подтверждения принятия письма сервером Яндекса");

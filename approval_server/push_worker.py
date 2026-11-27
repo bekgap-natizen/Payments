@@ -28,7 +28,7 @@ def run():
     while True:
         with sqlite3.connect(path,timeout=15) as con:
             con.row_factory=sqlite3.Row
-            row=con.execute("""SELECT o.id,o.attempts,o.subscription,s.data,e.event,e.register_id,r.payload
+            row=con.execute("""SELECT o.id,o.attempts,o.subscription,s.data,e.event,e.actor,e.register_id,r.payload
                 FROM outbox o JOIN subscriptions s ON s.endpoint=o.subscription AND s.user_id=o.user_id
                 JOIN events e ON e.id=o.event_id JOIN registers r ON r.id=e.register_id WHERE o.state='pending' AND o.attempts<5 ORDER BY o.id LIMIT 1""").fetchone()
             if row:con.execute("UPDATE outbox SET attempts=attempts+1 WHERE id=?",(row["id"],))
@@ -38,18 +38,18 @@ def run():
             sub=json.loads(row["data"])
             if not valid_endpoint(sub["endpoint"]):raise ValueError("Bad push endpoint")
             titles={"submitted":"Новый реестр на согласование","approved":"Платежи утверждены","returned":"Реестр возвращён на доработку","sent":"Реестр отправлен по почте"}
-            body="Откройте приложение для просмотра реестра."
+            body=titles.get(row["event"],"Платежи")+". Откройте приложение."
             if sub.pop("showSummary",False):
                 p=json.loads(row["payload"]);group={}
                 for r in p["rows"]:group.setdefault(r["org"],[]).append(r)
                 money=lambda c:f"{c/100:,.2f}".replace(","," ").replace(".",",")+" ₽"
-                lines=["Всего "+money(p["totalCents"])]
+                lines=[titles.get(row["event"],"Платежи"),"Всего "+money(p["totalCents"]),"Пользователь: "+row["actor"]]
                 for org,rows in group.items():
                     lines.append(org+": "+money(sum(r["cents"] for r in rows)))
                     lines.extend("  "+r["supplier"]+": "+money(r["cents"]) for r in rows)
                 body="\n".join(lines)
                 if len(body)>300:body=body[:270]+"… Подробнее в приложении."
-            data=json.dumps({"id":row["register_id"],"title":"ВОЛМАКС · "+titles.get(row["event"],"Платежи"),"body":body},ensure_ascii=False)
+            data=json.dumps({"id":row["register_id"],"title":"ВОЛМАКС Платежи","body":body},ensure_ascii=False)
             result=webpush(subscription_info=sub,data=data,vapid_private_key=key,vapid_claims={"sub":subject},ttl=3600,requests_session=session,timeout=20)
             if not 200<=result.status_code<300:raise RuntimeError("Push rejected")
             state="sent"

@@ -96,7 +96,8 @@ test('manual supplier checkbox allocates one million to not-yet-due invoices, wi
  assert.equal(p.items[r.allocatedDocuments[0].id],30000000);
  assert.equal(p.manual,true);
  assert.equal(chosen('Other','B'),900);
- assert.equal(ctx.supplierCheckboxState(ctx.currentRow(key)).partial,true);
+ assert.equal(ctx.supplierCheckboxState(ctx.currentRow(key)).checked,true);
+ assert.equal(ctx.supplierCheckboxState(ctx.currentRow(key)).partial,undefined);
  assert.equal(ctx.paymentSelection(C.analyze(ctx.state.snapshot,date,ctx.state.settings,ctx.state.plans)).eligible.find(x=>x.key===key).supplier,supplier);
 });
 test('supplier checkbox only uses leftover budget; manual edits and cancellation survive redistribution',async()=>{
@@ -127,4 +128,32 @@ test('checkbox does not exceed supplier debt or budget and keeps manual amount o
  const d=ctx.currentRow(key).allocatedDocuments[0];
  ctx.updateDocument(key,d.id,'value','200');assert.equal(chosen('Critical'),20000);
  input.value='5000';await ctx.runOrgBudget('A');assert.equal(chosen('Critical'),20000);
+});
+
+test('stale draft remains available for reconciliation instead of being silently erased',async()=>{
+ const {ctx,input}=setup();await ctx.runOrgBudget('A');enableActions(ctx);
+ const key=k('Old'),d=ctx.currentRow(key).allocatedDocuments[0];
+ ctx.updateDocument(key,d.id,'value','100');
+ const id=ctx.planId(key),before=JSON.stringify(ctx.state.plans[id]);
+ ctx.state.snapshot={...ctx.state.snapshot,fingerprint:'NEW'};
+ input.value='1500';await ctx.runOrgBudget('A');
+ assert.equal(JSON.stringify(ctx.state.plans[id]),before);
+ assert.equal(ctx.currentRow(key).planNeedsReview,true);
+ assert.equal(ctx.paymentSelection(C.analyze(ctx.state.snapshot,date,ctx.state.settings,ctx.state.plans)).eligible.some(r=>r.key===key),false);
+});
+test('reopened approved manual choice is preserved on repeated automatic distribution',async()=>{
+ const {ctx,input,chosen}=setup();await ctx.runOrgBudget('A');enableActions(ctx);
+ const key=k('Old'),id=ctx.planId(key);
+ ctx.state.plans[id]={...ctx.state.plans[id],status:'approved'};
+ await ctx.action(key,'reopen');
+ assert.equal(ctx.state.plans[id].manual,true);
+ input.value='5000';await ctx.runOrgBudget('A');assert.equal(chosen('Old'),20000);
+});
+test('clear confirmation cannot overwrite a concurrently changed plan',async()=>{
+ const {ctx,chosen}=setup();await ctx.runOrgBudget('A');enableActions(ctx);
+ const key=k('Old'),id=ctx.planId(key),d=ctx.currentRow(key).allocatedDocuments[0];
+ ctx.appConfirm=async()=>{ctx.state.plans[id]={...ctx.state.plans[id],items:{[d.id]:12345}};return true;};
+ await ctx.action(key,'clear');
+ assert.equal(chosen('Old'),12345);
+ assert.match(ctx.message,/Данные изменились/);
 });

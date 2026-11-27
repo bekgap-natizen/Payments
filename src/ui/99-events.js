@@ -3,6 +3,7 @@ document.addEventListener('click',async e=>{
  const vendorCheck=e.target.closest('[data-supplier-select]');
  if(vendorCheck){e.preventDefault();e.stopPropagation();const k=vendorCheck.dataset.supplierSelect;const row=currentRow(k);
  if(row&&!vendorCheck.disabled)await action(k,'toggle-supplier');return;}
+ const review=e.target.closest('[data-reconcile-vendor]');if(review){navigate('reconcile',review.dataset.reconcileVendor);return;}
  const nav=e.target.closest('[data-page]');if(nav){navigate(nav.dataset.page);return;}
  const open=e.target.closest('[data-open-vendor]');if(open){const k=open.dataset.openVendor;state.openVendors.add(k);navigate('payments');return;}
  const load=e.target.closest('[data-load]');if(load){state.date=load.dataset.load;saveLocal('selected-date',state.date);await refreshSnapshots();navigate('payments');return;}
@@ -30,7 +31,7 @@ document.addEventListener('input',e=>{const el=e.target;
  clearTimeout(state.searchTimer);state.searchTimer=setTimeout(()=>{const focused=document.activeElement===el,pos=el.selectionStart;draw();const input=$(el.id);if(focused&&input){input.focus();try{input.setSelectionRange(pos,pos);}catch(_){}}},190);
  }});
 document.addEventListener('toggle',e=>{const details=e.target;if(details.matches?.('[data-vendor]')){if(details.open)state.openVendors.add(details.dataset.vendor);else state.openVendors.delete(details.dataset.vendor);}},true);
-window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(pages[p]&&state.page!==p){state.page=p;draw();}});
+window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(pages[p]&&state.page!==p){state.reconcileVendor='';state.page=p;draw();}});
 (async function start(){state.settings=readLocal('settings',{});state.plans=readLocal('plans',{});state.date=readLocal('selected-date',null);
  try{db=await openDb();await refreshSnapshots();if(!state.snapshot&&state.snapshots.length){state.date=state.snapshots[0].date;state.snapshot=state.snapshots[0];}}catch(e){db=null;toast('Не удалось открыть хранилище: '+e.message,8000);}
  state.page=pages[location.hash.slice(1)]?location.hash.slice(1):(state.snapshot?'payments':'import');draw();})();

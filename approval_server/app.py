@@ -64,7 +64,21 @@ def normalize(raw):
         clean.append({"org":org,"supplier":supplier,"cents":subtotal,"documents":detail})
         total+=subtotal
     if type(raw.get("totalCents")) is not int or total!=raw.get("totalCents") or total>=MAX_CENTS: fail("Итог реестра не совпадает")
-    return {"date":date,"rows":clean,"totalCents":total}
+    overview=raw.get("overview")
+    if overview is not None:
+        if not isinstance(overview,list) or len(overview)>15000:fail("Некорректный обзор")
+        seen=set(); snapshot=[]; debt=0; due=0
+        for row in overview:
+            if not isinstance(row,dict):fail("Некорректная строка обзора")
+            org=name(row.get("org"),200); supplier=name(row.get("supplier")); key=(org,supplier)
+            d=row.get("debtCents"); u=row.get("dueCents")
+            if key in seen or type(d) is not int or type(u) is not int or not 0<=u<=d<MAX_CENTS:fail("Некорректный долг обзора")
+            seen.add(key); debt+=d; due+=u
+            snapshot.append({"org":org,"supplier":supplier,"debtCents":d,"dueCents":u})
+        lookup={(r["org"],r["supplier"]):r["debtCents"] for r in snapshot}
+        if debt>=MAX_CENTS or due>=MAX_CENTS or any(r["cents"]>lookup.get((r["org"],r["supplier"]),-1) for r in clean):fail("Обзор не соответствует реестру")
+        overview=snapshot
+    return {"date":date,"rows":clean,"totalCents":total,"overview":overview}
 
 def excel(p):
     out=io.BytesIO(); book=xlsxwriter.Workbook(out,{"in_memory":True,"strings_to_formulas":False,"strings_to_urls":False})
@@ -112,6 +126,7 @@ CREATE TABLE IF NOT EXISTS registers(id INTEGER PRIMARY KEY, date TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, register_id INTEGER NOT NULL REFERENCES registers(id), actor TEXT NOT NULL, event TEXT NOT NULL, created TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS subscriptions(endpoint TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), user_id TEXT NOT NULL REFERENCES users(id), subscription TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, UNIQUE(event_id,subscription));
+CREATE TABLE IF NOT EXISTS invitations(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS login_limits(user_key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, until TEXT NOT NULL);
 """
 def create_app(config=None):
@@ -145,7 +160,7 @@ def create_app(config=None):
             g.user=db().execute("SELECT u.id,u.role,s.csrf FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?",(digest(token),now())).fetchone()
         if request.method not in ("GET","HEAD","OPTIONS"):
             if request.headers.get("Origin")!=origin:fail("Недоверенный источник запроса",403)
-            if request.path!="/api/login":
+            if request.path not in ("/api/login","/api/pair"):
                 if not g.user:fail("Войдите в приложение",401)
                 if not hmac.compare_digest(request.headers.get("X-CSRF-Token",""),g.user["csrf"]):fail("Неверный токен запроса",403)
     @app.after_request
@@ -183,7 +198,7 @@ def create_app(config=None):
         eid=con.execute("INSERT INTO events(register_id,actor,event,created,note,details) VALUES(?,?,?,?,?,?)",(id_,g.user["id"],kind,now(),note,json.dumps(details or {},ensure_ascii=False))).lastrowid
         if notify:
             slots=",".join("?" for _ in notify)
-            for sub in con.execute("SELECT s.endpoint,s.user_id FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE u.role IN ("+slots+")",notify):
+            for sub in con.execute("SELECT s.endpoint,s.user_id FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE u.role IN ("+slots+") AND u.id<>?",(*notify,g.user["id"])):
                 con.execute("INSERT OR IGNORE INTO outbox(event_id,user_id,subscription) VALUES(?,?,?)",(eid,sub["user_id"],sub["endpoint"]))
     def view(r,history=False):
         x=dict(r);x["payload"]=json.loads(x["payload"])
@@ -201,6 +216,21 @@ def create_app(config=None):
             con.execute("DELETE FROM sessions WHERE user_id=?",(user_id,))
             con.execute("DELETE FROM subscriptions WHERE user_id=?",(user_id,))
         click.echo("Account saved. Sessions and subscriptions revoked.")
+    # Local admin creates random single-use invitations. No public invitation-creation endpoint.
+    @app.post("/api/pair")
+    def pair():
+        token=body().get("code")
+        if not isinstance(token,str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}",token):fail("Неверный код подключения",401)
+        with tx() as con:
+            invite=con.execute("SELECT i.user_id,u.role FROM invitations i JOIN users u ON u.id=i.user_id WHERE i.token=? AND i.expires>?",(digest(token),now())).fetchone()
+            if not invite:fail("Код истёк или уже использован",401)
+            con.execute("DELETE FROM invitations WHERE token=?",(digest(token),))
+            session=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
+            expires=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=180)).isoformat(timespec="seconds")
+            con.execute("INSERT INTO sessions VALUES(?,?,?,?)",(digest(session),invite["user_id"],csrf,expires))
+        result=jsonify(id=invite["user_id"],role=invite["role"],csrf=csrf)
+        result.set_cookie("volmax_approval",session,max_age=15552000,httponly=True,secure=app.config["COOKIE_SECURE"],samesite="Strict",path="/")
+        return result
     @app.post("/api/login")
     def login():
         raw=body();user=raw.get("login");pw=raw.get("password")
@@ -263,7 +293,7 @@ def create_app(config=None):
             event(con,id_,"submitted",notify=("director","commercial"))
         return jsonify(id=id_,revision=rev),201
     @app.post("/api/registers/<int:id_>/decision")
-    @role("director")
+    @role("director","commercial")
     def decision(id_):
         raw=body();action=raw.get("action")
         if action not in ("approve","return"):fail("Недопустимое решение")
@@ -274,7 +304,7 @@ def create_app(config=None):
             if r["status"]!="pending" or raw.get("version")!=r["version"]:fail("Реестр уже изменился. Обновите страницу.",409)
             status="approved" if action=="approve" else "returned"
             con.execute("UPDATE registers SET status=?,version=version+1 WHERE id=?",(status,id_))
-            event(con,id_,status,note,notify=("accountant","commercial"))
+            event(con,id_,status,note,notify=("accountant","commercial","director"))
         return jsonify(ok=True)
     @app.get("/api/registers/<int:id_>/excel")
     @role("accountant")
@@ -321,6 +351,7 @@ def create_app(config=None):
     def index():return send_from_directory(ROOT/"static","index.html")
     @app.get("/<file>")
     def static_file(file):
+        if file=="volmax-mark.png":return send_from_directory(ROOT.parent/"assets",file)
         if file not in {"app.js","app.css","manifest.webmanifest","sw.js","icon.svg","icon-192.png","icon-512.png","apple-touch-icon.png"}:fail("Не найдено",404)
         return send_from_directory(ROOT/"static",file)
     @app.get("/desktop/")

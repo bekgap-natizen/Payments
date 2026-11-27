@@ -1,4 +1,4 @@
-function navigate(page){if(!pages[page])page='overview';state.page=page;location.hash=page;draw();window.scrollTo({top:0,behavior:'instant'});}
+function navigate(page,reconcileVendor=''){if(!pages[page])page='overview';state.reconcileVendor=page==='reconcile'?reconcileVendor:'';state.page=page;location.hash=page;draw();window.scrollTo({top:0,behavior:'instant'});}
 function currentRow(k){if(!state.snapshot)return null;return C.analyze(state.snapshot,state.date,state.settings,state.plans).active.find(r=>r.key===k)||null;}
 function getPlan(r){const prev=state.plans[planId(r.key)]||{};
  if(prev.status==='paid'&&!r.planNeedsReview)throw Error('Оплата уже отмечена в этом срезе; повторное редактирование запрещено');
@@ -40,13 +40,15 @@ function fillSupplierFromBudget(r,p){
  checkTotal(r,p.items);return added;
 }
 async function action(k,act){const r=currentRow(k);if(!r)return toast('Нет поставщика');
- const prev=state.plans[planId(k)]||{},current=r.plan||{};
+ const id=planId(k),prev=state.plans[id]||{},snapshot=state.snapshot,date=state.date,settings=JSON.stringify(state.settings),prior=JSON.stringify(state.plans[id]||{});
+ const unchanged=()=>state.snapshot===snapshot&&state.date===date&&JSON.stringify(state.settings)===settings&&JSON.stringify(state.plans[id]||{})===prior;
+ const verify=()=>{if(!unchanged()){draw();throw Error('Данные изменились. Повторите действие');}};
  try{
  if(act==='toggle-supplier'){
   const p=getPlan(r);
   if(selectedSum(r)>0){
    if(!await appConfirm('Снять выбор по '+r.supplier+'? Все назначенные суммы по этому поставщику, включая ручные, будут отменены. Другие поставщики не изменятся.')){draw();return;}
-   if(state.plans[planId(k)]!==prev||currentRow(k)?.key!==k){draw();throw Error('План изменился. Повторите действие');}
+   verify();
    p.items={};savePlan(r,p);return;
   }
   const added=fillSupplierFromBudget(r,p);
@@ -55,7 +57,7 @@ async function action(k,act){const r=currentRow(k);if(!r)return toast('Нет п
  }
  if(act==='select-due'||act==='clear'||act==='clear-due'){
  const p=getPlan(r);
- if(act==='clear'){if(Object.keys(p.items).length&&!await appConfirm('Снять все выбранные суммы по '+r.supplier+', включая ручные?')){draw();return;}p.items={};}
+ if(act==='clear'){if(selectedSum(r)>0&&!await appConfirm('Снять все выбранные суммы по '+r.supplier+', включая ручные?')){draw();return;}verify();p.items={};}
  else if(act==='clear-due'){for(const d of r.allocatedDocuments){if(d.dueNow)delete p.items[d.id];}}
  else for(const d of r.allocatedDocuments){if(d.allocatedCents>0&&d.dueNow&&d.remainingCents>0&&!Object.hasOwn(p.items,d.id))p.items[d.id]=d.remainingCents;}
  checkTotal(r,p.items);state.openVendors.add(k);savePlan(r,p);return;
@@ -63,21 +65,21 @@ async function action(k,act){const r=currentRow(k);if(!r)return toast('Нет п
  if(act==='reopen'){
  if(prev.status!=='approved'||r.planNeedsReview)throw Error('Нельзя изменить этот план, сначала перепроверьте срез');
  if(!await appConfirm('Вернуть утверждённые суммы в черновик для редактирования?'))return;
- state.plans[planId(k)]={...prev,status:'draft',changedAt:new Date().toISOString()};saveLocal('plans',state.plans);draw();return;
+ verify();state.plans[planId(k)]={...prev,manual:true,status:'draft',changedAt:new Date().toISOString()};saveLocal('plans',state.plans);draw();return;
  }
  if(act==='approve'){
- if((typeof approvalHosted==='function'&&approvalHosted()))throw Error('Окончательное утверждение выполняет генеральный директор в разделе согласования');
+ if(typeof approvalHosted==='function'&&approvalHosted())throw Error('Утверждение выполняет один из директоров в разделе согласования');
  if(r.planNeedsReview)throw Error('Изменился отчёт или отсрочка: пересоздайте выбор по документам');
  const sum=checkTotal(r,prev.items||{});if(!sum)throw Error('Сначала выберите документы галочками');
  if(paymentBlocked(r))throw Error('Долг по поставщику требует сверки');
  // Manual approval is independent from the indicative auto-allocation budget.
  if(!await appConfirm('Утвердить '+rub(sum)+' по '+r.supplier+'? Это локальное согласование, без перевода денег. Распределение «новые → старые» расчётное, не подтверждённое зачётами 1С.'))return;
- state.plans[planId(k)]={...prev,status:'approved',changedAt:new Date().toISOString(),sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay};saveLocal('plans',state.plans);toast('Документы утверждены для реестра');draw();return;
+ verify();state.plans[planId(k)]={...prev,status:'approved',changedAt:new Date().toISOString(),sourceFingerprint:state.snapshot.fingerprint,delayDays:r.delay};saveLocal('plans',state.plans);toast('Документы утверждены для реестра');draw();return;
  }
  if(act==='paid'){
  if(prev.status!=='approved'||r.planNeedsReview)throw Error('Отметить оплаченным можно только утверждённый текущий платёж');
  const sum=checkTotal(r,prev.items||{});if(!sum)throw Error('Сумма не найдена');
  if(!await appConfirm('Подтвердить, что '+rub(sum)+' фактически переведено ВНЕ приложения? Действие сохраняется как локальная отметка на этом срезе.'))return;
- state.plans[planId(k)]={...prev,status:'paid',paidAt:new Date().toISOString()};saveLocal('plans',state.plans);toast('Оплата отмечена; новый отчёт 1С не вычитает её повторно');draw();return;
+ verify();state.plans[planId(k)]={...prev,status:'paid',paidAt:new Date().toISOString()};saveLocal('plans',state.plans);toast('Оплата отмечена; новый отчёт 1С не вычитает её повторно');draw();return;
  }
  }catch(e){toast('Ошибка: '+e.message,7000);}}
