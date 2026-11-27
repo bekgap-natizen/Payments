@@ -23,6 +23,8 @@ def run():
                 browser=p.chromium.launch(headless=True,args=["--no-sandbox"])
                 def login(role,mobile=False):
                     page=browser.new_page(viewport={"width":390 if mobile else 1280,"height":844})
+                    page.on("pageerror",lambda err: print("BROWSER ERROR:",err,flush=True))
+                    page.set_default_timeout(8000)
                     page.goto(origin)
                     page.locator("#login-name").fill(role);page.locator("#login-password").fill("example-test-password")
                     page.locator("#login button").click()

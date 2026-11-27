@@ -21,7 +21,7 @@ async function init(){
  catch(err){if(!me)loginView();else notice(err.message);}
  if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 }
-function top(){
+function renderTop(){
  return '<nav class="tabs" aria-label="Разделы">'+[['overview','▦ Обзор'],['today','▤ Согласование'],['history','◷ История']].map(([id,label])=>'<button data-mode="'+id+'" class="'+(mode===id?'active':'')+'">'+label+'</button>').join('')+'</nav><div class="utilities"><small>'+e(roles[me.role])+'</small><button data-action="refresh">Обновить</button><button data-action="push">Уведомления</button>'+(me.role==='accountant'?'<a class="btn" href="/desktop/">Рабочее место бухгалтера</a>':'')+'</div>';
 }
 const groupsOf=rows=>{const groups=new Map();for(const row of rows){if(!groups.has(row.org))groups.set(row.org,[]);groups.get(row.org).push(row);}return groups};
@@ -43,9 +43,9 @@ async function list(){
  if(!me)return;current=null;
  const params=new URLSearchParams(mode==='history'?Object.fromEntries(Object.entries(query).filter(([,v])=>v)):{});
  const result=await api('/api/registers?'+params);const rows=result.registers;
- if(mode==='overview'){$('main').innerHTML=top()+overview(rows[0]);return;}
+ if(mode==='overview'){$('main').innerHTML=renderTop()+overview(rows[0]);return;}
  if(mode==='today'&&rows.length){await show(rows.find(r=>r.status==='pending')?.id||rows[0].id);return;}
- let content=top();
+ let content=renderTop();
  if(mode==='today')content+='<h1>Платежи на дату</h1>';
  else content+='<h1>История платежей</h1><form id="filters" class="card"><div class="grid"><div><label>С даты</label><input name="from" type="date" value="'+e(query.from)+'"></div><div><label>По дату</label><input name="to" type="date" value="'+e(query.to)+'"></div><div><label>Организация</label><input name="org" value="'+e(query.org)+'" placeholder="Все организации"></div><div><label>Поставщик</label><input name="supplier" value="'+e(query.supplier)+'" placeholder="Все поставщики"></div></div><p><button class="primary wide" type="submit">Найти</button></p></form><div class="card kpi"><div class="label">Утверждено за период</div><div class="value">'+rub(result.matchingCents)+'</div></div>';
  if(!rows.length)content+='<div class="card"><p>Нет реестров за выбранный период.</p></div>';
@@ -56,7 +56,7 @@ async function show(id){
  const r=await api('/api/registers/'+id);current=r;
  const status=approvedStatuses.includes(r.status)?'approved':r.status;
  const total=label=>'<div class="card kpi"><div class="line total-head"><span class="label">'+label+'</span>'+badge(status)+'</div><div class="total">'+rub(r.payload.totalCents)+'</div></div>';
- let html=top()+'<h1>Платежи на дату</h1><small>'+fmt(r.date)+' · Версия '+r.revision+' · '+e(roles[me.role])+'</small>'+total('Всего к оплате');
+ let html=renderTop()+'<h1>Платежи на дату</h1><small>'+fmt(r.date)+' · Версия '+r.revision+' · '+e(roles[me.role])+'</small>'+total('Всего к оплате');
  for(const [org,rows] of groupsOf(r.payload.rows)){
    html+='<h2>'+e(org)+'</h2>';
    for(const row of rows)html+='<div class="supplier-row"><span>'+e(row.supplier)+'</span><b>'+rub(row.cents)+'</b></div>';
