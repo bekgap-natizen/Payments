@@ -1,4 +1,4 @@
-function navigate(page){if(!pages[page])page='overview';state.page=page;location.hash=page;draw();window.scrollTo({top:0,behavior:'instant'});}
+function navigate(page,reconcileVendor=''){if(!pages[page])page='overview';state.reconcileVendor=page==='reconcile'?reconcileVendor:'';state.page=page;location.hash=page;draw();window.scrollTo({top:0,behavior:'instant'});}
 function currentRow(k){if(!state.snapshot)return null;return C.analyze(state.snapshot,state.date,state.settings,state.plans).active.find(r=>r.key===k)||null;}
 function getPlan(r){const prev=state.plans[planId(r.key)]||{};
  if(prev.status==='paid'&&!r.planNeedsReview)throw Error('Оплата уже отмечена в этом срезе; повторное редактирование запрещено');
