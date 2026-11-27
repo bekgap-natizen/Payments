@@ -260,7 +260,7 @@ def create_app(config=None):
         r=jsonify(ok=True);r.delete_cookie("volmax_approval",path="/",secure=app.config["COOKIE_SECURE"],samesite="Strict");return r
     @app.get("/api/me")
     @role()
-    def me():return jsonify(**dict(g.user),today=today(),vapidPublicKey=os.getenv("PAYMENTS_VAPID_PUBLIC",""))
+    def me():return jsonify(**dict(g.user),today=today(),vapidPublicKey=os.getenv("PAYMENTS_VAPID_PUBLIC",""),unifiedMail=app.config.get("MAIL_SERVICE") is not None)
     @app.get("/api/registers")
     @role()
     def listing():
@@ -312,10 +312,39 @@ def create_app(config=None):
         r=get(db(),id_)
         if r["status"] not in ("approved","sending","sent","uncertain"):fail("Реестр не утверждён",409)
         return send_file(io.BytesIO(excel(json.loads(r["payload"]))),mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",as_attachment=True,download_name="Payments-"+r["date"]+".xlsx")
+    @app.post("/api/registers/<int:id_>/send-mail")
+    @role("accountant")
+    def send_mail(id_):
+        service=app.config.get("MAIL_SERVICE")
+        if service is None:fail("Единый VOLMAX Server не подключён",409)
+        if not service.credentials():fail("Настройте почту в локальном VOLMAX Server",409)
+        raw=body()
+        with tx() as con:
+            r=get(con,id_)
+            if r["status"]!="approved" or raw.get("version")!=r["version"]:fail("Реестр изменился",409)
+            p=json.loads(r["payload"])
+            orgs={}
+            for row in p["rows"]:orgs.setdefault(row["org"],[]).append({"name":row["supplier"],"cents":row["cents"]})
+            payload={"date":p["date"],"totalCents":p["totalCents"],"organizations":[{"name":org,"suppliers":rows} for org,rows in orgs.items()],"xlsxBase64":base64.b64encode(excel(p)).decode("ascii")}
+            retry=bool(con.execute("SELECT 1 FROM events WHERE register_id=? AND event='approved' AND note LIKE 'Отметка бухгалтера%'",(id_,)).fetchone())
+            con.execute("UPDATE registers SET status='sending',version=version+1 WHERE id=?",(id_,))
+            event(con,id_,"sending")
+        try:
+            result=service.send(payload,force=retry)
+            accepted=result.get("ok") is True and result.get("status")=="accepted"
+        except Exception:accepted=False
+        with tx() as con:
+            latest=get(con,id_)
+            if latest["status"]!="sending" or latest["version"]!=r["version"]+1:fail("Статус изменился. Проверьте отправку",409)
+            status="sent" if accepted else "uncertain"
+            con.execute("UPDATE registers SET status=?,version=version+1 WHERE id=?",(status,id_))
+            event(con,id_,status,"SMTP принял письмо" if accepted else "Проверьте папку «Отправленные» перед повтором",notify=("director","commercial") if accepted else ())
+        return jsonify(ok=accepted,status=status)
     @app.post("/api/registers/<int:id_>/send")
     @role("accountant")
     def send_state(id_):
         raw=body();action=raw.get("action")
+        if app.config.get("MAIL_SERVICE") is not None and action in ("begin","accepted","uncertain"):fail("Используйте отправку через единый сервер",409)
         with tx() as con:
             r=get(con,id_)
             if raw.get("version")!=r["version"]:fail("Реестр изменился. Обновите страницу.",409)

@@ -4,3 +4,5 @@ XlsxWriter>=3.2,<4
 pywebpush>=2.0,<3
 cryptography>=44,<49
 Pillow>=11,<13
+
+qrcode[pil]>=8,<9

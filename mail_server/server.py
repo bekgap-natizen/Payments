@@ -45,6 +45,10 @@ MAX_BODY = 9 * 1024 * 1024
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 API_VERSION = 1
+try:
+    import mobile_host
+except ImportError:
+    mobile_host=None
 AUTOSTART_NAME = "VOLMAX Payments Mail Server"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 PROTOCOL_KEY = r"Software\Classes\volmax-payments"
@@ -466,7 +470,7 @@ def make_handler(service):
             self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8")
             self.send_header("Content-Length",str(len(data)))
             self.send_header("Cache-Control","no-store")
-            self.send_header("Content-Security-Policy","default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy","default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")
             self.send_header("X-Frame-Options","DENY")
             self.send_header("X-Content-Type-Options","nosniff")
             self.end_headers();self.wfile.write(data)
@@ -500,6 +504,16 @@ def make_handler(service):
                     elif data.get("enabled") is True: register_protocol()
                     else: unregister_protocol()
                     return self._json(200,{"ok":True})
+                if self.path.startswith("/local/mobile/"):
+                    if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN):raise MailError("Недействительный запрос")
+                    if mobile_host is None or mobile_host.host is None:raise MailError("Мобильный модуль не установлен")
+                    try:
+                        if self.path=="/local/mobile/start": result=mobile_host.host.start(data.get("origin"))
+                        elif self.path=="/local/mobile/invite": result=mobile_host.host.invite(data.get("role"))
+                        elif self.path=="/local/mobile/revoke": result=mobile_host.host.revoke(data.get("role"))
+                        else:return self._json(404,{"error":"Not found"})
+                    except (ValueError,OSError) as exc:raise MailError(str(exc))
+                    return self._json(200,result)
                 if self.path=="/local/delete":
                     if not secrets.compare_digest(self.headers.get("X-Setup-Token",""),SETUP_TOKEN): raise MailError("Недействительный запрос")
                     service.store.delete();service.revoke_pairings()
@@ -517,9 +531,11 @@ def admin_html(service):
     code=service.pair_code if time.monotonic()<service.pair_until else ""
     startup=autostart_enabled()
     protocol=protocol_enabled()
-    return """<!doctype html><html lang="ru"><meta charset="utf-8"><title>VOLMAX Mail Server</title>
+    mobile_panel=mobile_host.panel() if mobile_host else ''
+    title='VOLMAX Server' if mobile_host and mobile_host.host else 'VOLMAX Mail Server'
+    return """<!doctype html><html lang="ru"><meta charset="utf-8"><title>"""+title+"""</title>
 <style>body{font:15px Arial;background:#eef3f7;margin:0;padding:24px;color:#1e3449}main{max-width:480px;margin:auto;background:white;border-radius:16px;padding:28px;box-shadow:0 4px 22px #aaa5}label{display:block;margin:16px 0 6px}input,button{box-sizing:border-box;width:100%;padding:12px;font-size:15px;border:1px solid #ccd6e1;border-radius:8px}button{margin-top:15px;background:#066fa9;color:white;cursor:pointer}small{color:#597084}#msg{margin-top:15px;white-space:pre-line}</style>
-<main><h2>VOLMAX Mail Server</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
+<main><h2>"""+title+"""</h2><p>Почта: <b>"""+escape(sender)+"""</b></p>
 <p>Постоянных привязок Payments: <b>"""+str(len(service.session_tokens))+"""</b></p>
 <p>Код подключения для AppBox: <strong>"""+(code or "не требуется")+"""</strong></p>
 <small>Код нужен один раз для каждого браузера. Действует 15 минут. После перезапуска сохранённая привязка работает автоматически, если браузер разрешает хранение.</small>
@@ -538,7 +554,7 @@ def admin_html(service):
 <label>Корпоративная почта Яндекс</label><input id="email" type="email" autocomplete="username" placeholder="user@volmax.ru">
 <label>Пароль приложения Яндекс (не пароль от аккаунта)</label><input id="password" type="password" autocomplete="new-password">
 <button id="save">Проверить Яндекс и сохранить</button><button id="delete" style="background:#526776">Удалить сохранённый аккаунт</button>
-<div id="msg" role="status"></div><p><small>Пароль хранится в Диспетчере учётных данных Windows и не отправляется в AppBox. SMTP: smtp.yandex.ru:465.</small></p></main>
+<div id="msg" role="status"></div><p><small>Пароль хранится в Диспетчере учётных данных Windows и не отправляется в AppBox. SMTP: smtp.yandex.ru:465.</small></p>"""+mobile_panel+"""</main>
 <script>const token="""+json.dumps(SETUP_TOKEN)+""";async function call(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Setup-Token':token},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.error);return j}
 document.getElementById('save').onclick=async()=>{const out=document.getElementById('msg');out.textContent='Проверяем...';try{await call('/local/configure',{email:document.getElementById('email').value,password:document.getElementById('password').value});out.textContent='Подключение проверено. Данные сохранены. Обновите страницу.';document.getElementById('password').value=''}catch(e){out.textContent=e.message}};
 const compatible="""+json.dumps(service.allow_opaque)+""";
@@ -567,6 +583,9 @@ def main():
             if "--background" not in sys.argv: webbrowser.open(f"http://{HOST}:{PORT}/")
             return
         raise
+    if mobile_host is not None:
+        try:mobile_host.attach(HOME,service)
+        except Exception:print("Мобильный модуль недоступен. Почта продолжает работать.",flush=True)
     print(f"VOLMAX Mail Server: http://{HOST}:{PORT}/",flush=True)
     if "--background" not in sys.argv: webbrowser.open(f"http://{HOST}:{PORT}/")
     try: httpd.serve_forever()

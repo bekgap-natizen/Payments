@@ -105,6 +105,12 @@ async function mailConnect(){
  if(!status.paired||!status.sender)throw Error('Нет привязки Mail Server.');return {token,sender:status.sender};
 }
 async function sendMail(){
+ if(me.unifiedMail){
+  const r=current;if(!r||r.status!=='approved')return;
+  if(!window.confirm('Отправить утверждённый реестр на '+rub(r.payload.totalCents)+' по почте?'))return;
+  const result=await api('/api/registers/'+r.id+'/send-mail',{version:r.version});
+  await show(r.id);notice(result.ok?'SMTP принял письмо.':'Проверьте отправку в Яндексе.');return;
+ }
  const r=current;if(!r||r.status!=='approved')return;
  const connected=await mailConnect();if(!connected)return;
  if(!window.confirm('Отправить утверждённый реестр '+rub(r.payload.totalCents)+' через '+connected.sender+' четырём получателям?'))return;
